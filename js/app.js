@@ -1414,9 +1414,32 @@ document.addEventListener('keydown', event => {
 
 // ---------------------------------------------------------------- boot
 
+/** lensbeta.vercel.app/?reset — start over: clears only Lens's own storage and connections, then the URL screen. */
+function resetRequested() {
+  let params;
+  try {params = new URLSearchParams(location.search);} catch {return false;}
+  if (!params.has('reset')) return false;
+  params.delete('reset');
+  const rest = params.toString();
+  try {history.replaceState(null, '', location.pathname + (rest ? '?' + rest : ''));} catch {}
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(BANNER_KEY);
+  } catch {}
+  forgetView();
+  resetLocal(structuredClone(INITIAL));
+  return true;
+}
 function boot() {
+  const reset = resetRequested();
   // Render from local state right away; connection status fills in when lens.init() settles.
   ready = attempt(() => lens.init()).then(result => result || {}, error => ({error: errorText(error)}));
+  if (reset) ready = ready.then(async result => {
+    try {await lens.disconnectAll();} catch {}
+    connecting.clear();
+    notify('Lens was reset in this browser.');
+    return {...result, returnedFrom: undefined};
+  });
   const remembered = takeRememberedView();
   if (state.onboarding) {
     view = 'onboard';

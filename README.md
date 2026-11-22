@@ -51,3 +51,7 @@ The local server serves the static files and relays `/api/you` (You.com) and `/a
 - `api/`: Vercel functions for the You.com search relay (`you.js`), the OpenRouter AI relay (`ai.js`), and LinkedIn sign-in and posting.
 - `assets/`: wordmark and app icon.
 - `docs/`: the spec and the design reference.
+
+### Starting over
+
+Open `https://<your-domain>/?reset` to clear only Lens's data in that browser (brand, drafts, schedule, chats, connections) and return to the URL screen. Settings → Erase local data does the same from inside the app.
