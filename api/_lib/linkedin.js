@@ -25,7 +25,7 @@
 // session ends) holding { t: access token, sub, name, picture, exp }, base64url JSON + "." + HMAC-SHA256 signature keyed
 // by LINKEDIN_CLIENT_SECRET. The token is never sent to page JavaScript.
 
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const AUTHORIZE_URL = 'https://www.linkedin.com/oauth/v2/authorization';
 export const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
@@ -235,9 +235,49 @@ export function unseal(secret, purpose, token) {
   }
 }
 
-/** Session cookie: no Max-Age / Expires, so the browser drops it when the session ends. */
-export function sessionCookie(value) {
-  return `${SESSION_COOKIE}=${value}; HttpOnly; Secure; SameSite=Lax; Path=/`;
+// ------------------------------------------------------------------ browser-held session (localStorage)
+// The browser keeps the sign-in in localStorage as an AES-256-GCM blob it cannot read; it sends it back in the
+// `x-lens-li` header. The blob carries its own expiry (60 days at most).
+
+export const SESSION_HEADER = 'x-lens-li';
+export const HANDOFF_COOKIE = 'lens_li_handoff';
+export const SESSION_MAX_AGE_MS = 60 * 24 * 3600 * 1000;
+
+function blobKey(secret) {
+  return createHash('sha256').update(`lens-li-session:${secret}`).digest();
+}
+
+export function encryptSession(secret, value) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', blobKey(secret), iv);
+  const data = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()]);
+  return b64url(Buffer.concat([iv, cipher.getAuthTag(), data]));
+}
+
+export function decryptSession(secret, blob) {
+  if (typeof blob !== 'string' || !blob || blob.length > 6000) return null;
+  try {
+    const raw = Buffer.from(blob.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+    if (raw.length < 29) return null;
+    const decipher = createDecipheriv('aes-256-gcm', blobKey(secret), raw.subarray(0, 12));
+    decipher.setAuthTag(raw.subarray(12, 28));
+    const text = Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString('utf8');
+    const v = JSON.parse(text);
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Short-lived, script-readable cookie that hands the encrypted blob to the page once, right after sign-in. */
+export function handoffCookie(blob) {
+  return `${HANDOFF_COOKIE}=${blob}; Secure; SameSite=Lax; Path=/; Max-Age=300`;
+}
+
+/** Sign-in cookie, kept for as long as the LinkedIn token is valid (LinkedIn self-serve tokens last 60 days). */
+export function sessionCookie(value, maxAgeS = 60 * 24 * 3600) {
+  const age = Math.max(60, Math.min(Math.floor(Number(maxAgeS) || 0), 60 * 24 * 3600));
+  return `${SESSION_COOKIE}=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${age}`;
 }
 
 export function clearSessionCookie() {
@@ -258,16 +298,22 @@ export function randomState() {
 
 /** The verified session { t, sub, name, picture, exp } or null (missing, tampered or expired). */
 export function readSession(req, cfg) {
-  const raw = parseCookies(req)[SESSION_COOKIE];
-  if (!raw) return null;
-  const s = unseal(cfg.clientSecret, 'session', raw);
+  const header = req.headers && req.headers[SESSION_HEADER];
+  let s = null;
+  if (typeof header === 'string' && header) {
+    s = decryptSession(cfg.clientSecret, header.trim());
+  } else {
+    const raw = parseCookies(req)[SESSION_COOKIE]; // older sign-ins kept in a cookie
+    if (!raw) return null;
+    s = unseal(cfg.clientSecret, 'session', raw);
+  }
   if (!s || typeof s.t !== 'string' || !s.t || typeof s.sub !== 'string' || !s.sub) return null;
   if (typeof s.exp === 'number' && s.exp <= Date.now()) return null;
   return s;
 }
 
 export function hasSessionCookie(req) {
-  return Boolean(parseCookies(req)[SESSION_COOKIE]);
+  return Boolean(parseCookies(req)[SESSION_COOKIE]) || Boolean(req.headers && req.headers[SESSION_HEADER]);
 }
 
 // ------------------------------------------------------------------ LinkedIn calls

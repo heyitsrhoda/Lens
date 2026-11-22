@@ -13,6 +13,43 @@ const BASE = './api/linkedin';
 const UNAVAILABLE = 'LinkedIn sign-in needs the Vercel deployment of Lens.';
 const STATUS_TIMEOUT_MS = 10000;
 
+// The sign-in lives in localStorage as an encrypted blob only the Lens server can open (the LinkedIn token is
+// never readable here). It expires after 60 days; then LinkedIn asks to connect again.
+const SIGNIN_KEY = 'lens-li-v1';
+const HANDOFF_COOKIE = 'lens_li_handoff';
+const SIGNIN_MAX_AGE_MS = 60 * 24 * 3600 * 1000;
+
+/** Move a fresh sign-in (handed over in a short-lived cookie by the callback) into localStorage. */
+function adoptHandoff() {
+  try {
+    const hit = document.cookie.split(';').map((c) => c.trim()).find((c) => c.startsWith(`${HANDOFF_COOKIE}=`));
+    if (!hit) return;
+    const blob = decodeURIComponent(hit.slice(HANDOFF_COOKIE.length + 1));
+    document.cookie = `${HANDOFF_COOKIE}=; Max-Age=0; Path=/; Secure; SameSite=Lax`;
+    if (blob && /^[A-Za-z0-9_-]+$/.test(blob)) localStorage.setItem(SIGNIN_KEY, JSON.stringify({ blob, savedAt: Date.now() }));
+  } catch { /* storage or cookies unavailable */ }
+}
+
+function signin() {
+  adoptHandoff();
+  try {
+    const saved = JSON.parse(localStorage.getItem(SIGNIN_KEY) || 'null');
+    if (!saved || typeof saved.blob !== 'string' || !saved.blob) return '';
+    if (Date.now() - Number(saved.savedAt || 0) > SIGNIN_MAX_AGE_MS) { forgetSignin(); return ''; }
+    return saved.blob;
+  } catch { return ''; }
+}
+
+function forgetSignin() {
+  try { localStorage.removeItem(SIGNIN_KEY); } catch { /* storage unavailable */ }
+}
+
+/** Headers for a call to the Lens LinkedIn functions, with the saved sign-in when there is one. */
+function authHeaders(extra = {}) {
+  const blob = signin();
+  return blob ? { ...extra, 'x-lens-li': blob } : extra;
+}
+
 let state = { connected: false };
 let available = null; // null unknown · true functions exist · false no functions here (static hosting / dev server)
 const listeners = new Set();
@@ -62,7 +99,7 @@ export async function status() {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS);
   try {
-    res = await fetch(`${BASE}/me`, { headers: { Accept: 'application/json' }, cache: 'no-store', credentials: 'same-origin', signal: controller.signal });
+    res = await fetch(`${BASE}/me`, { headers: authHeaders({ Accept: 'application/json' }), cache: 'no-store', credentials: 'same-origin', signal: controller.signal });
   } catch {
     // Network blip or a stalled function: keep what we knew.
     return current();
@@ -86,6 +123,7 @@ export async function status() {
   } else {
     const next = { connected: false };
     if (!res.ok && body.error) next.error = String(body.error);
+    if (res.ok) forgetSignin(); // the server says the saved sign-in is missing, expired or invalid
     set(next);
   }
   return current();
@@ -114,11 +152,12 @@ export async function connect() {
 export async function disconnect() {
   if (!isFileProtocol()) {
     try {
-      await fetch(`${BASE}/logout`, { method: 'POST', headers: { Accept: 'application/json' }, cache: 'no-store', credentials: 'same-origin' });
+      await fetch(`${BASE}/logout`, { method: 'POST', headers: authHeaders({ Accept: 'application/json' }), cache: 'no-store', credentials: 'same-origin' });
     } catch {
-      /* the cookie ends with the browser session anyway */
+      /* nothing else to clear on the server */
     }
   }
+  forgetSignin();
   set({ connected: false });
 }
 
@@ -131,7 +170,7 @@ export async function publish({ text, imageUrl } = {}) {
   try {
     res = await fetch(`${BASE}/post`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' }),
       body: JSON.stringify(body),
       cache: 'no-store',
       credentials: 'same-origin',
@@ -150,6 +189,7 @@ export async function publish({ text, imageUrl } = {}) {
   }
   if (res.status === 401) {
     const msg = String(out.error || 'Connect LinkedIn first.');
+    forgetSignin();
     set({ connected: false, ...(out.expired ? { error: msg } : {}) });
     throw codedError('not-connected', msg, { status: 401 });
   }
@@ -168,7 +208,7 @@ export async function comment({ urn, text } = {}) {
   try {
     res = await fetch(`${BASE}/comment`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' }),
       body: JSON.stringify({ urn: String(urn || ''), text: String(text || '') }),
       cache: 'no-store',
       credentials: 'same-origin',
@@ -186,6 +226,7 @@ export async function comment({ urn, text } = {}) {
   }
   if (res.status === 401) {
     const msg = out.expired ? 'LinkedIn session expired — reconnect LinkedIn in Settings.' : 'Reconnect LinkedIn in Settings.';
+    forgetSignin();
     set({ connected: false, ...(out.expired ? { error: String(out.error || msg) } : {}) });
     throw codedError('not-connected', msg, { status: 401 });
   }

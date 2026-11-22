@@ -12,8 +12,8 @@
 //   If a server's 401 hides WWW-Authenticate from the browser (no Access-Control-Expose-Headers), discovery falls
 //   back to the well-known protected-resource URLs.
 //
-// Connection state (tokens, session id, tools, status, account) lives only in sessionStorage under
-// 'lens-mcp-v3' — closing the tab forgets it. The pending OAuth record and registered clients also live in
+// Connection state (tokens, session id, tools, status, account) lives in localStorage under 'lens-mcp-v3' and
+// expires 60 days after sign-in. The pending OAuth record and registered clients also live in
 // sessionStorage only. Nothing here touches localStorage. Entries for servers Lens no longer uses (left by an
 // older version in the same tab session) are dropped when the store is read.
 
@@ -28,6 +28,7 @@ const SCOPE_OVERRIDES = {};
 const SCOPE_FALLBACK = { sculptex: 'mcp' };
 
 const STATE_KEY = 'lens-mcp-v3';
+const CONNECTION_MAX_AGE_MS = 60 * 24 * 3600 * 1000; // a sign-in lasts 60 days
 const PENDING_KEY = 'lens-mcp-v3-pending';
 const CLIENTS_KEY = 'lens-mcp-v3-clients';
 const RPC_TIMEOUT_MS = 30000;
@@ -58,9 +59,19 @@ function loadStore() {
   store = readSession(STATE_KEY);
   if (!store || typeof store !== 'object' || Array.isArray(store)) store = {};
   let pruned = false;
+  const now = Date.now();
   for (const key of Object.keys(store)) {
     if (!isKnownKey(key)) {
       delete store[key];
+      pruned = true;
+      continue;
+    }
+    const conn = store[key];
+    if (!conn || typeof conn !== 'object') continue;
+    if (conn.auth && !conn.connectedAt) { conn.connectedAt = now; pruned = true; } // started before the 60-day rule
+    if (conn.connectedAt && now - conn.connectedAt > CONNECTION_MAX_AGE_MS) {
+      store[key] = { url: conn.url || DEFAULT_URLS[key], status: 'disconnected', tools: [], auth: null, sessionId: null,
+        error: `${LABELS[key] || key} sign-in expired after 60 days. Connect again.` };
       pruned = true;
     }
   }
@@ -115,6 +126,9 @@ export function patchConn(key, patch) {
   const all = loadStore();
   const prev = all[key] || { url: DEFAULT_URLS[key] || '' };
   all[key] = { ...prev, ...patch };
+  // Sign-ins last 60 days from when they were made, then the founder connects again.
+  if (patch.status === 'connected' && !prev.connectedAt) all[key].connectedAt = Date.now();
+  if (patch.status === 'disconnected' || patch.auth === null) delete all[key].connectedAt;
   saveStore();
   emit(key);
 }
@@ -124,12 +138,26 @@ function rt(key) {
   return runtime[key];
 }
 
+// Connections and registered clients persist in localStorage so a sign-in survives closing the tab (Sculptex's
+// refresh token lasts 90 days and rotates on use). Only the short OAuth round-trip record stays in sessionStorage.
+function storeFor(name) {
+  return name === PENDING_KEY ? sessionStorage : localStorage;
+}
+
 function readSession(name) {
-  try { return JSON.parse(sessionStorage.getItem(name) || '{}') || {}; } catch { return {}; }
+  try {
+    const store = storeFor(name);
+    let raw = store.getItem(name);
+    if (raw === null && store !== sessionStorage) {
+      raw = sessionStorage.getItem(name); // carry over a connection made before connections persisted
+      if (raw !== null) { store.setItem(name, raw); sessionStorage.removeItem(name); }
+    }
+    return JSON.parse(raw || '{}') || {};
+  } catch { return {}; }
 }
 
 function writeSession(name, value) {
-  try { sessionStorage.setItem(name, JSON.stringify(value)); } catch { /* storage unavailable */ }
+  try { storeFor(name).setItem(name, JSON.stringify(value)); } catch { /* storage unavailable */ }
 }
 
 function savePending(state, record) {
@@ -941,5 +969,8 @@ export function disconnectAll() {
   try {
     sessionStorage.removeItem(PENDING_KEY);
     sessionStorage.removeItem(CLIENTS_KEY);
+    localStorage.removeItem(CLIENTS_KEY);
+    localStorage.removeItem(STATE_KEY);
+    sessionStorage.removeItem(STATE_KEY);
   } catch { /* storage unavailable */ }
 }

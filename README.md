@@ -26,7 +26,7 @@ Web search and page reading use You.com (`api/you.js`). Every AI call (site summ
 ## Data and connections
 
 - Your brand, drafts, schedule, chats and the latest listening results (pain points and threads) live in your browser's `localStorage` (key `lens-v3`). **Erase local data** clears them and disconnects everything.
-- Connections are session-only. Sculptex (an MCP server with OAuth) is kept in `sessionStorage`; it is the only visual provider. LinkedIn sign-in is kept in an HttpOnly session cookie that the browser drops when the session ends, so the LinkedIn token never reaches page scripts.
+- Connections are saved in this browser's `localStorage` and expire 60 days after you connect. Sculptex (an MCP server with OAuth) renews its access token automatically in that time. LinkedIn's sign-in is stored as an encrypted blob only the Lens server can open, so the LinkedIn token is never readable by page scripts. Settings → Erase local data or `?reset` clears everything.
 - **Scheduled posts send only while Lens is open.** There is no server-side scheduler. Lens checks every 30 seconds, and when you return to the tab, for scheduled posts that are due. If LinkedIn is not connected, due posts wait and send once you connect. With LinkedIn connected, **Post now** on a scheduled post sends it right away.
 
 ## Deploy on Vercel

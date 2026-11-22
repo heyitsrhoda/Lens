@@ -5,10 +5,7 @@
 //
 // reason codes: cancelled · state · token · profile · scope · unknown
 
-import {
-  TOKEN_URL, USERINFO_URL, clearStateCookie, config, liMessage, notConfigured, parseCookies, query, readBodyJson,
-  redirect, redirectUri, seal, sessionCookie, sendJson, STATE_COOKIE, timedFetch, unseal, withFlag,
-} from '../_lib/linkedin.js';
+import { TOKEN_URL, USERINFO_URL, clearStateCookie, config, liMessage, notConfigured, parseCookies, query, readBodyJson, redirect, redirectUri, seal, sessionCookie, sendJson, STATE_COOKIE, timedFetch, unseal, withFlag, clearSessionCookie, handoffCookie, encryptSession, SESSION_MAX_AGE_MS } from '../_lib/linkedin.js';
 
 function fail(res, back, reason) {
   return redirect(res, withFlag(back, 'error', reason), [clearStateCookie()]);
@@ -100,9 +97,10 @@ export default async function handler(req, res) {
     sub: me.sub,
     name: name.slice(0, 120),
     picture,
-    exp: expiresIn ? Date.now() + expiresIn * 1000 : Date.now() + 60 * 24 * 3600 * 1000,
+    exp: Date.now() + Math.min(expiresIn ? expiresIn * 1000 : SESSION_MAX_AGE_MS, SESSION_MAX_AGE_MS), // 60 days at most
   };
   // Whether the comment permission was granted (unknown when LinkedIn leaves `scope` out of the token response).
   if (scope) session.feed = granted.includes('w_member_social_feed');
-  return redirect(res, withFlag(back, 'connected'), [clearStateCookie(), sessionCookie(seal(cfg.clientSecret, 'session', session))]);
+  // The page moves the encrypted sign-in into localStorage and deletes the handoff cookie.
+  return redirect(res, withFlag(back, 'connected'), [clearStateCookie(), clearSessionCookie(), handoffCookie(encryptSession(cfg.clientSecret, session))]);
 }
