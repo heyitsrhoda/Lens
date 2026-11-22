@@ -35,7 +35,7 @@ Web search and page reading use You.com (`api/you.js`). Every AI call (site summ
 2. Add these environment variables:
    - `YOU_API_KEY`: your You.com API key (web search and page extraction).
    - `OPENROUTER_API_KEY`: your OpenRouter API key (all AI calls). Set a credit limit on this key in OpenRouter: `/api/ai` refuses other websites, but anyone can still call it with a script, and every call is billed to this key.
-   - `OPENROUTER_MODEL` (optional): the OpenRouter model id. Defaults to the free `google/gemma-4-31b-it:free` (with OpenRouter's free router as a fallback). Free models are rate-limited by OpenRouter; for higher quality and limits use a paid model such as `anthropic/claude-sonnet-5.5` or the cheaper `anthropic/claude-haiku-5.5`.
+   - `OPENROUTER_MODEL` (optional): the OpenRouter model id. Defaults to `anthropic/claude-haiku-5.5` (cheap, fast, no free-tier daily cap). Free models like `google/gemma-4-31b-it:free` also work (with OpenRouter's free router as a fallback) but are rate-limited; `anthropic/claude-sonnet-5.5` writes better and costs more.
    - `LINKEDIN_CLIENT_ID` and `LINKEDIN_CLIENT_SECRET`: from your LinkedIn developer app.
    - `LINKEDIN_FEED_SCOPE` (optional): set to `1` once the app has the Community Management API product, so replies to LinkedIn posts go through the API (see step 3).
 3. In the LinkedIn developer portal, on your app:

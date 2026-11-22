@@ -8,13 +8,13 @@
 //   errors:  { error: { message, code } } with HTTP 400/401/402 (credits)/403/408/429/502/503; errors after generation
 //            started can arrive inside an HTTP 200 (top-level `error`, or finish_reason 'error' with choices[0].error).
 //
-// The model is fixed by the deployment (env OPENROUTER_MODEL, else the free 'google/gemma-4-31b-it:free'); callers cannot pick one.
+// The model is fixed by the deployment (env OPENROUTER_MODEL, else 'anthropic/claude-haiku-5.5'); callers cannot pick one.
 // Free models also get OpenRouter's free router as a fallback (OpenRouter `models` routing) for when the primary is busy.
 // Every call is billed to OPENROUTER_API_KEY, so use a key with a credit limit set in OpenRouter (per-key limit).
 // Never logs keys or bodies.
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_MODEL = 'google/gemma-4-31b-it:free';
+const DEFAULT_MODEL = 'anthropic/claude-haiku-5.5';
 const FREE_FALLBACK = 'openrouter/free';
 const FREE_MIN_TOKENS = 4000;
 const isFree = (id) => id.endsWith(':free') || id === FREE_FALLBACK;

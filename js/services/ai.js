@@ -1,6 +1,6 @@
 // AI client for Lens. The browser never calls the model provider directly: it POSTs to the same-origin relay
 // ./api/ai (api/ai.js on Vercel, or `python3 dev/serve.py` locally), which calls OpenRouter with the
-// deployment's OPENROUTER_API_KEY and model (OPENROUTER_MODEL, default google/gemma-4-31b-it:free).
+// deployment's OPENROUTER_API_KEY and model (OPENROUTER_MODEL, default anthropic/claude-haiku-5.5).
 //
 //   status({ force })                                               → { relay, key, model, confirmed }
 //   chat({ system, messages, maxTokens, temperature, signal })      → text

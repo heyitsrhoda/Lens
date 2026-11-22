@@ -4,7 +4,7 @@
     python3 dev/serve.py            # http://127.0.0.1:8000
     PORT=8080 python3 dev/serve.py
     YOU_API_KEY=... OPENROUTER_API_KEY=... python3 dev/serve.py   # same env vars as the Vercel deployment
-    OPENROUTER_MODEL=anthropic/claude-haiku-5.5 ...                # optional; default google/gemma-4-31b-it:free
+    OPENROUTER_MODEL=anthropic/claude-haiku-5.5 ...                # optional; default anthropic/claude-haiku-5.5
 
 Serves the repo root as static files (correct MIME types for ES modules) and emulates the
 Vercel functions api/you.js and api/ai.js so live mode works locally:
@@ -45,7 +45,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 SEARCH_URL = "https://ydc-index.io/v1/search"
 EXTRACT_URL = "https://ydc-index.io/v1/extract"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "google/gemma-4-31b-it:free"
+DEFAULT_MODEL = "anthropic/claude-haiku-5.5"
 FREE_FALLBACK = "openrouter/free"
 
 MAX_BODY = 64 * 1024
