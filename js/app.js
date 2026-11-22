@@ -163,6 +163,28 @@ function hasVisual(post) {
   const src = post?.visual?.src;
   return Boolean(safeImage(src) || (typeof src === 'string' && src.startsWith('idb:')));
 }
+/** Swap "idb:<key>" references for images already in memory (synchronous). */
+function restoreCachedImages() {
+  for (const item of [...state.posts, ...state.journal]) {
+    const ref = item?.visual?.src;
+    if (typeof ref === 'string' && ref.startsWith('idb:')) {
+      const value = imageCache.get(ref.slice(4));
+      if (value) item.visual.src = value;
+    }
+  }
+}
+/** The image for a post's visual: the data URL itself, or a saved image looked up by its reference. */
+async function resolveImage(src) {
+  if (typeof src !== 'string') return '';
+  if (!src.startsWith('idb:')) return safeImage(src);
+  const key = src.slice(4);
+  let value = imageCache.get(key);
+  if (!value) {try {value = await images.getImage(key);} catch {value = null;}}
+  if (typeof value !== 'string' || !value.startsWith('data:image/')) return '';
+  imageCache.set(key, value);
+  imageKeys.set(value, key);
+  return safeImage(value);
+}
 /** Put saved images back into posts and calendar items (they load as "idb:<key>" references). */
 async function hydrateImages() {
   const waiting = [...state.posts, ...state.journal].filter(item => typeof item?.visual?.src === 'string' && item.visual.src.startsWith('idb:'));
@@ -1523,8 +1545,8 @@ function saveScheduled(form) {
 function refreshPublishViews() {
   if (view === 'calendar' || view === 'scheduled-post') refresh();
 }
-function publishPayload(post) {
-  const src = safeImage(post.visual?.src);
+async function publishPayload(post) {
+  const src = await resolveImage(post.visual?.src);
   return {id: post.id, title: post.title, copy: post.copy, ...(src ? {visual: {src, provider: post.visual.provider}} : {})};
 }
 // One tab at a time posts: every open Lens tab runs autoPublish on the same saved schedule.
@@ -1544,7 +1566,7 @@ async function publishPost(id, manual = false) {
       const post = getScheduledPost(id);
       if (!post || (!manual && (!isDue(post) || (post.errorAt && Date.now() - post.errorAt < PUBLISH_RETRY)))) return;
       let result, failure;
-      try {result = await lens.publish(publishPayload(post));}
+      try {result = await lens.publish(await publishPayload(post));}
       catch (error) {failure = error;}
       if (state !== owner) return;
       const current = getScheduledPost(id);
@@ -1703,6 +1725,7 @@ function adoptSaved() {
   const keep = view === 'scan' || onboardBusy ? state.onboarding : undefined;
   Object.assign(state, loadState());
   if (keep !== undefined) state.onboarding = keep;
+  restoreCachedImages(); // saved state holds image references; put the images back right away
 }
 function syncFromOtherTab() {
   adoptSaved();
