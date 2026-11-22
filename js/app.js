@@ -21,9 +21,9 @@ const CLOSING = 'I have enough to save your brand. Connect LinkedIn to continue 
 const DM_REWRITE = 'The founder did not like this message. Write a clearly different version.';
 const DM_HINT = 'Copy the message, send it on LinkedIn, then mark it sent. Swipe left for a new version.';
 const REPLY_REWRITE = 'The founder did not like this reply. Write a clearly different version.';
-const REPLY_HINT_LINKEDIN = 'Approve to post this reply on LinkedIn. Swipe left for a new version.';
+const REPLY_HINT_LINKEDIN = 'Approve to post this reply on LinkedIn. Swipe left to skip it.';
 const REPLY_MANUAL_CODES = ['unsupported', 'not-found', 'forbidden', 'not-linkedin', 'rejected', 'invalid'];
-const REPLY_HINT = 'Copy the reply, post it in the thread, then mark it sent. Swipe left for a new version.';
+const REPLY_HINT = 'Copy the reply, post it in the thread, then mark it sent. Swipe left to skip it.';
 const REPLY_MAX = 1250; // LinkedIn comment limit
 const LISTEN_STALE = 12 * 3600000;
 const EFFORTS = ['low', 'medium', 'high'];
@@ -540,8 +540,8 @@ function labeledDecisions(declineTitle, approveLabel, approveTitle, hint, disabl
 function decisionButtons(post) {
   const disabled = rewritingId !== null || replyingId !== null || revisionBusy ? 'disabled' : '';
   if (post.kind === 'dm') return labeledDecisions('Write a new version', 'I sent this', 'Mark as sent', DM_HINT, disabled);
-  if (isLinkedInReply(post)) return labeledDecisions('Write a new version', 'Post reply', 'Post this reply on LinkedIn', REPLY_HINT_LINKEDIN, disabled);
-  if (post.kind === 'reply') return labeledDecisions('Write a new version', 'I sent this', 'Mark as sent', REPLY_HINT, disabled);
+  if (isLinkedInReply(post)) return labeledDecisions('Remove from stack', 'Post reply', 'Post this reply on LinkedIn', REPLY_HINT_LINKEDIN, disabled);
+  if (post.kind === 'reply') return labeledDecisions('Remove from stack', 'I sent this', 'Mark as sent', REPLY_HINT, disabled);
   return `<div class="decisions">
       <button id="decline" class="icon decision decline" data-action="decline" aria-label="Decline post" title="Decline" ${disabled}>${icon('decline')}</button>
       <button id="approve" class="icon decision approve" data-action="approve" aria-label="Approve and schedule post" title="Approve and schedule" ${disabled}>${icon('approve')}</button>
@@ -1054,7 +1054,7 @@ function commitDecision(approve, id) {
     notify('Scheduled for ' + formatSlot(slot) + '.');
   } else {
     state.journal.unshift({...post, status: 'Declined'});
-    notify('Post declined.');
+    notify(post.kind === 'reply' ? 'Reply removed from your stack.' : 'Post declined.');
   }
   save();
   drag = null;
@@ -1067,7 +1067,7 @@ function decide(approve, card = main.querySelector('#post-card')) {
   if (view !== 'review' || editing || decisionPending || !state.posts.length || rewritingId !== null || replyingId !== null || revisionBusy) return;
   drag = null;
   const post = state.posts[0];
-  if ((post.kind === 'dm' || post.kind === 'reply') && !approve) {
+  if (post.kind === 'dm' && !approve) {
     if (card) paintSwipe(card, 0);
     rewriteItem();
     return;
