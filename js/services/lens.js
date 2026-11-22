@@ -1237,8 +1237,8 @@ async function draftPosts(b, job, { sculptex, fits3d }) {
       ? `\n- visual3d: Sculptex (a 3D render tool) is connected and this company works with physical or 3D things, so give EVERY post a visual3d.`
       : `\n- visual3d: Sculptex (a 3D render tool) is connected. Give a post a visual3d whenever any object, product, place or metaphor in it could be shown as a 3D render — that is most posts. Use null only when nothing physical fits.`;
   const visualSpec = sculptex
-    ? `\n- visual3d.prompt: one object or small scene to render in 3D — the object, its shape, materials and colors, camera angle and lighting, plain studio background, no text or logos (max 60 words).
-- visual3d.effort: "low" for simple objects or scenes (the default); "medium" only for multi-part assemblies or detailed scenes; "high" only when the post is about one intricate hero object. Pick the lowest effort that will still look good — renders only need to look good, not be manufacturable.`
+    ? `\n- visual3d.prompt: Sculptex builds ONE engineered, 3D-printable part (not scenes, people, animals, organic sculptures, text or logos). Describe one simple part or product shape that illustrates the post: what it is, its overall dimensions in mm and 1–3 features (holes, fillets, slots, ribs) (max 50 words).
+- visual3d.effort: "low" for simple parts (the default — fastest); "medium" only for a part with several features; "high" only when the post is about one intricate part. Pick the lowest effort that will still look good — the render only needs to look good.`
     : '';
 
   const system = `You write LinkedIn posts for a founder, in their brand voice. Each post is built on one pain point people have publicly described, or one recent web result (trend, news or event), and connects it to what the founder's company does.
@@ -1876,6 +1876,8 @@ function applyEffort(tool, args, effort) {
   return args;
 }
 
+const SCULPTEX_BUDGET_MS = 9 * 60 * 1000; // keep waiting on one part for up to ~9 minutes in total
+
 async function renderWithSculptex(prompt, effort = 'low') {
   const conn = mcp.getConnection('sculptex');
   let tools = conn.tools.length ? conn.tools : await mcp.listTools('sculptex');
@@ -1885,11 +1887,32 @@ async function renderWithSculptex(prompt, effort = 'low') {
     tool = pickGenerationTool(tools) || mcp.pickTool('sculptex', ['generate', 'create', 'model', 'part', 'render', 'design']);
   }
   if (!tool) throw err('', 'Sculptex has no tool that renders models.');
-  const raw = await mcp.callTool('sculptex', tool.name, applyEffort(tool, buildArgs(tool, prompt), clampEffort(effort)));
-  const { renderUrl, modelUrl, text } = extractRender(raw);
-  const src = /^data:image\//i.test(renderUrl) || /^https:\/\//i.test(renderUrl) ? renderUrl : '';
+  // Sculptex builds the part as a background job. A call that runs out of time answers "still being built" with a
+  // job_id; calling again with only that job_id keeps waiting. A finished part whose preview image timed out is
+  // asked for again the same way, which re-sends the model with a fresh preview.
+  const props = (tool.inputSchema && tool.inputSchema.properties) || {};
+  const takesJobId = 'job_id' in props;
+  let args = applyEffort(tool, buildArgs(tool, prompt), clampEffort(effort));
+  if ('name' in props && !args.name) args.name = clip(prompt, 60);
+  const started = Date.now();
+  let jobId = '';
+  let src = '';
+  let modelUrl = '';
+  let text = '';
+  for (let round = 0; round < 5; round++) {
+    const raw = await mcp.callTool('sculptex', tool.name, args);
+    const got = extractRender(raw);
+    modelUrl = got.modelUrl || modelUrl;
+    text = got.text;
+    src = /^data:image\//i.test(got.renderUrl) || /^https:\/\//i.test(got.renderUrl) ? got.renderUrl : '';
+    if (src) break;
+    const id = (/\b(job_[a-z0-9]{10,60})\b/i.exec(got.text || '') || [])[1] || '';
+    if (id) jobId = id;
+    if (!takesJobId || !jobId || Date.now() - started > SCULPTEX_BUDGET_MS) break;
+    args = { job_id: jobId };
+  }
   if (!src) {
-    throw err('', modelUrl ? 'Sculptex made a model but no preview image.' : `Sculptex returned no image${text ? `: ${clip(text, 160)}` : '.'}`);
+    throw err('', modelUrl ? 'Sculptex built the part but its preview image didn’t come back in time.' : `Sculptex returned no image${text ? `: ${clip(text, 160)}` : '.'}`);
   }
   // Keep a LinkedIn-ready copy (PNG/JPEG/GIF, capped size); a webp or oversized render is re-encoded here.
   const out = { src: (await postableImage(src)) || src, provider: 'Sculptex' };

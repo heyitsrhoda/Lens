@@ -31,7 +31,7 @@ const STATE_KEY = 'lens-mcp-v3';
 const PENDING_KEY = 'lens-mcp-v3-pending';
 const CLIENTS_KEY = 'lens-mcp-v3-clients';
 const RPC_TIMEOUT_MS = 30000;
-const CALL_TIMEOUT_MS = 240000;
+const CALL_TIMEOUT_MS = 300000; // Sculptex's server works up to 285 s on one call before answering
 const PENDING_MAX_AGE_MS = 30 * 60 * 1000;
 
 const runtime = {}; // per key, page-lifetime only: { initialized, protocolVersion, initPromise }
