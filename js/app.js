@@ -19,7 +19,7 @@ const QUESTIONS = [
 const SLOTS = QUESTIONS.map(([key]) => key);
 const CLOSING = 'I have enough to save your brand. Connect LinkedIn to continue (Lens posts there). Sculptex for 3D visuals is optional.';
 const DM_REWRITE = 'The founder did not like this message. Write a clearly different version.';
-const DM_HINT = 'Copy the message, send it on LinkedIn, then mark it sent. Swipe left for a new version.';
+const DM_HINT = 'Copy the message, send it to them where they posted, then mark it sent. Swipe left for a new version.';
 const REPLY_REWRITE = 'The founder did not like this reply. Write a clearly different version.';
 const REPLY_HINT_LINKEDIN = 'Approve to post this reply on LinkedIn. Swipe left to skip it.';
 const REPLY_MANUAL_CODES = ['unsupported', 'not-found', 'forbidden', 'not-linkedin', 'rejected', 'invalid'];

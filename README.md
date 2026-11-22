@@ -17,7 +17,7 @@ Web search and page reading use You.com (`api/you.js`). Every AI call (site summ
      - On a **LinkedIn** thread, press **Post reply** or swipe right and Lens posts the comment through the LinkedIn API. The notice links to it. If your LinkedIn session ended, the card asks you to reconnect in Settings.
      - On **other platforms** (Reddit, Hacker News, X…), press **Copy**, use **Open thread ↗** to post it yourself, then press **I sent this** or swipe right.
      - **I don’t like this** or swipe left asks Lens for a clearly different version, in place.
-   - DMs: press **Copy**, send the message yourself on LinkedIn, then press **I sent this** or swipe right. Press **I don’t like this** or swipe left for a new version. Lens never sends DMs.
+   - DMs: press **Copy**, send the message yourself wherever that person posted (Reddit, X, LinkedIn, …), then press **I sent this** or swipe right. Press **I don’t like this** or swipe left for a new version. Lens never sends DMs.
    - Sculptex visuals: when Sculptex is connected, Lens suggests a 3D render for posts where one fits (almost always for 3D, architecture, CAD, hardware, product, manufacturing, game or design companies) and renders them in the background, one at a time, at the lowest effort that still looks good (low, medium or high). The card shows the render while it works. If a render fails, the post simply stays without a visual.
 5. **Chat.** Brainstorm a post with Lens and add the draft to your stack.
 6. **Calendar.** Your week of scheduled posts. Drag a post to another day to move it to a suggested slot, or open it to edit, revise, or post now.
