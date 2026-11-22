@@ -188,3 +188,8 @@ h1[tabindex="-1"]:focus{outline:none}
 .done-decision{justify-content:center}
 .done-button{display:inline-flex;align-items:center;gap:7px;min-height:44px;padding:0 24px;border-radius:12px}
 .done-button .line-icon{width:18px;height:18px}
+
+/* Swiping a Done card shows a green Done label instead of a check or X */
+.swipe-overlay span.done-mark{width:auto;padding:0 18px}
+.swipe-done{font-size:22px;font-weight:800;letter-spacing:-.02em}
+.done-button.lit{filter:brightness(1.12);box-shadow:0 0 0 4px #bdf4c633}

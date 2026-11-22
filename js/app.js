@@ -1846,13 +1846,18 @@ main.addEventListener('drop', event => {
 main.addEventListener('dragend', () => {scheduleDragId = null; clearDropTargets();});
 function paintSwipe(card, delta) {
   const strength = Math.min(0.65, Math.abs(delta) / 180);
-  const color = delta < 0 ? '#ffab9e' : '#bdf4c6';
+  // Done cards (DMs, replies outside LinkedIn): either direction means Done, always green.
+  const done = isCopyCard(state.posts[0]);
+  const color = done || delta >= 0 ? '#bdf4c6' : '#ffab9e';
   card.style.setProperty('--offset', delta + 'px');
   card.style.setProperty('--tilt', (delta / 19) + 'deg');
   card.style.setProperty('--strength', strength);
   card.style.setProperty('--tint', color);
   const mark = card.querySelector('#swipe-mark');
-  if (mark) mark.innerHTML = icon(delta < 0 ? 'decline' : 'approve');
+  if (mark) mark.innerHTML = done ? '<b class="swipe-done">Done</b>' : icon(delta < 0 ? 'decline' : 'approve');
+  if (mark) mark.classList.toggle('done-mark', done);
+  const doneButton = document.querySelector('#done');
+  if (doneButton) doneButton.classList.toggle('lit', done && Math.abs(delta) > 20);
   for (const [id, direction] of [['decline', -1], ['approve', 1]]) {
     const button = document.querySelector('#' + id);
     if (!button) continue;
