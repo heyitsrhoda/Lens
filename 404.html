@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Lens</title>
+  <meta name="description" content="Lens helps founders find people describing the problem they solve, reply with care, and turn recurring pain points into posts. Runs entirely in your browser — no accounts, no database." />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#F7F6F3" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0E0E12" media="(prefers-color-scheme: dark)" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234F46E5'/%3E%3Cg transform='translate(4 4)' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='m14.31 8 5.74 9.94M9.69 8h11.48M7.38 12l5.74-9.94M9.69 16 3.95 6.06M14.31 16H2.83M16.62 12l-5.74 9.94'/%3E%3C/g%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://esm.sh" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="./css/base.css" />
+  <link rel="stylesheet" href="./css/views-a.css" />
+  <link rel="stylesheet" href="./css/views-b.css" />
+  <link rel="stylesheet" href="./css/views-c.css" />
+  <link rel="stylesheet" href="./css/views-d.css" />
+  <link rel="stylesheet" href="./css/views-start.css" />
+  <link rel="stylesheet" href="./css/views-stack.css" />
+  <script>
+    // Apply a saved theme before first paint (per-viewer preference only).
+    (function () {
+      try {
+        var t = localStorage.getItem('lens_theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    })();
+  </script>
+  <style>
+    .boot { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+      font: 500 14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; color: #6B6B76; background: #F7F6F3; padding: 16px; text-align: center; }
+    .boot-mark { width: 44px; height: 44px; border-radius: 12px; background: #4F46E5; display: grid; place-items: center; animation: boot-spin 2.4s linear infinite; }
+    .boot-title { font-weight: 650; font-size: 18px; color: #1A1A1F; letter-spacing: -0.01em; }
+    .boot-slow { display: none; max-width: 360px; }
+    .boot.is-slow .boot-slow { display: block; }
+    .boot.is-slow .boot-mark { animation: none; }
+    @keyframes boot-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .boot-mark { animation: none; } }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .boot { background: #0E0E12; color: #9A9AA8; } :root:not([data-theme="light"]) .boot-title { color: #ECECF1; } }
+    :root[data-theme="dark"] .boot { background: #0E0E12; color: #9A9AA8; }
+    :root[data-theme="dark"] .boot-title { color: #ECECF1; }
+  </style>
+</head>
+<body>
+  <noscript>
+    <div style="max-width:520px;margin:64px auto;padding:0 16px;font:15px/1.6 Inter,system-ui,sans-serif">
+      <h1 style="font-size:22px">Lens needs JavaScript</h1>
+      <p>Lens runs entirely in your browser — your data never leaves it except to the APIs you connect. Please enable JavaScript and reload the page.</p>
+    </div>
+  </noscript>
+  <div id="root">
+    <div class="boot" id="boot" role="status" aria-live="polite">
+      <div class="boot-mark" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m14.31 8 5.74 9.94M9.69 8h11.48M7.38 12l5.74-9.94M9.69 16 3.95 6.06M14.31 16H2.83M16.62 12l-5.74 9.94"/></svg>
+      </div>
+      <div class="boot-title">Lens</div>
+      <div>Focusing…</div>
+      <div class="boot-slow">This is taking longer than usual. Lens loads React from esm.sh — check your connection or content blockers, then <a href="" onclick="location.reload();return false;">reload</a>.</div>
+    </div>
+  </div>
+  <script>
+    setTimeout(function () {
+      if (!window.__lensBooted) {
+        var b = document.getElementById('boot');
+        if (b) b.className = 'boot is-slow';
+      }
+    }, 12000);
+  </script>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
