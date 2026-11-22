@@ -4,10 +4,12 @@ Lens is a founder studio for LinkedIn. You give it your company URL. It reads yo
 
 Lens is plain browser JavaScript with no build step, no npm dependencies, no accounts and no database. The only server code is a few small Vercel functions in `api/`.
 
+Web search and page reading use You.com (`api/you.js`). Every AI call (site summary, onboarding, posts, DMs, revisions, chat) goes through OpenRouter (`api/ai.js`).
+
 ## The flow
 
 1. **Company URL.** Lens reads your site while the glass-lens animation plays, then opens the onboarding chat.
-2. **Onboarding chat.** A You.com AI agent confirms what your company does and asks about your audience, goal, posting cadence (1 to 14 posts a week) and voice, one question at a time. You can connect Canva, Sculptex and LinkedIn at the end.
+2. **Onboarding chat.** Lens's AI agent confirms what your company does and asks about your audience, goal, posting cadence (1 to 14 posts a week) and voice, one question at a time. You can connect Canva, Sculptex and LinkedIn at the end.
 3. **Stack.** Lens drafts posts grounded in fresh You.com search results about your field (trends, news, events) and mixes in DM drafts.
    - Posts: swipe right or press the check to approve and schedule. Swipe left or press the X to decline. Use the pencil to edit or add a visual with Canva or Sculptex, and the chat bubble to ask Lens for a revision.
    - DMs: press **Copy**, send the message yourself on LinkedIn, then press **I sent this** or swipe right. Press **I don’t like this** or swipe left for a new version. Lens never sends DMs.
@@ -25,7 +27,9 @@ Lens is plain browser JavaScript with no build step, no npm dependencies, no acc
 
 1. Import this repository into Vercel. Set **Framework Preset** to **Other**, with no build command and the repository root as the output.
 2. Add these environment variables:
-   - `YOU_API_KEY`: your You.com API key.
+   - `YOU_API_KEY`: your You.com API key (web search and page extraction).
+   - `OPENROUTER_API_KEY`: your OpenRouter API key (all AI calls). Set a credit limit on this key in OpenRouter: `/api/ai` refuses other websites, but anyone can still call it with a script, and every call is billed to this key.
+   - `OPENROUTER_MODEL` (optional): the OpenRouter model id. Defaults to `anthropic/claude-sonnet-5.5`; `anthropic/claude-haiku-5.5` is cheaper and `anthropic/claude-opus-5.5` is stronger.
    - `LINKEDIN_CLIENT_ID` and `LINKEDIN_CLIENT_SECRET`: from your LinkedIn developer app.
 3. In the LinkedIn developer portal, on your app:
    - Under **Auth**, add the redirect URL `https://<your-domain>/api/linkedin/callback`.
@@ -35,15 +39,15 @@ Lens is plain browser JavaScript with no build step, no npm dependencies, no acc
 ## Run locally
 
 ```sh
-YOU_API_KEY=... python3 dev/serve.py   # http://127.0.0.1:8000
+YOU_API_KEY=... OPENROUTER_API_KEY=... python3 dev/serve.py   # http://127.0.0.1:8000
 ```
 
-The local server serves the static files and relays `/api/you`. LinkedIn sign-in and posting need the Vercel deployment.
+The local server serves the static files and relays `/api/you` (You.com) and `/api/ai` (OpenRouter, `OPENROUTER_MODEL` optional). LinkedIn sign-in and posting need the Vercel deployment.
 
 ## Files
 
 - `index.html`, `css/app.css`, `js/app.js`: the interface.
 - `js/services/`: the service layer (`lens.js` is the only module the interface imports).
-- `api/`: Vercel functions for the You.com relay and LinkedIn sign-in and posting.
+- `api/`: Vercel functions for the You.com search relay (`you.js`), the OpenRouter AI relay (`ai.js`), and LinkedIn sign-in and posting.
 - `assets/`: wordmark and app icon.
 - `docs/`: the spec and the design reference.

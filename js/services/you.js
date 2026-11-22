@@ -1,11 +1,10 @@
-// You.com client for Lens. The browser never calls You.com directly: it POSTs to the same-origin relay
-// ./api/you?op=search|extract|agent (api/you.js on Vercel, or `python3 dev/serve.py` locally) and the relay
-// uses the deployment's YOU_API_KEY (or a key sent in `x-you-key`).
+// You.com search + extract client for Lens. The browser never calls You.com directly: it POSTs to the same-origin
+// relay ./api/you?op=search|extract (api/you.js on Vercel, or `python3 dev/serve.py` locally) and the relay
+// uses the deployment's YOU_API_KEY (or a key sent in `x-you-key`). AI (LLM) calls live in ./ai.js (OpenRouter).
 //
 // Relay envelope: { ok: true, data } | { ok: false, status, error }.
 //   search  → data = You.com Web Search response { results: { web: [{ url, title, description, snippets[], page_age }], news? } }
 //   extract → data = { url, title, contents: { full_page: { markdown } } }
-//   agent   → data = { text, model, ... } (Inference Router chat completion, OpenAI-style messages)
 //
 // Errors are thrown as Error with a readable .message and, when it applies, .code:
 //   'no-relay' — no /api/you here (file://, plain static hosting, 404)
@@ -15,7 +14,6 @@
 export const RELAY_URL = './api/you';
 
 const TIMEOUT_MS = 30000;
-const AGENT_TIMEOUT_MS = 75000;
 const STATUS_RETRY_MS = 10000;
 const USER_KEY_STORAGE = 'lens-you-key'; // optional: a developer may set their own key here from the console
 
@@ -203,130 +201,6 @@ export async function extract(url, { signal } = {}) {
   const contents = v.contents || {};
   const markdown = (contents.full_page && contents.full_page.markdown) || contents.markdown || v.markdown || '';
   return { url: v.url || url, title: String(v.title || ''), markdown: String(markdown || '') };
-}
-
-// ------------------------------------------------------------------ AI (op=agent → Inference Router)
-
-function stripThinking(text) {
-  return String(text || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-}
-
-function normalizeMessages(messages) {
-  const out = [];
-  for (const m of Array.isArray(messages) ? messages : []) {
-    if (!m || typeof m.content !== 'string' || !m.content.trim()) continue;
-    const role = m.role === 'assistant' ? 'assistant' : 'user';
-    const last = out[out.length - 1];
-    if (last && last.role === role) last.content += `\n\n${m.content}`;
-    else out.push({ role, content: m.content });
-  }
-  while (out.length && out[0].role !== 'user') out.shift();
-  if (!out.length) throw codedError('', 'Nothing to send to the AI.');
-  return out;
-}
-
-/** chat({ system, messages:[{role:'user'|'assistant', content}], maxTokens, temperature, signal }) → text */
-export async function chat({ system, messages, maxTokens = 1500, temperature, signal } = {}) {
-  const body = { system: String(system || ''), messages: normalizeMessages(messages), maxTokens: Math.round(maxTokens) };
-  if (typeof temperature === 'number') body.temperature = temperature;
-  const data = await relay('agent', body, { signal, timeout: AGENT_TIMEOUT_MS });
-  const text = stripThinking(data && data.text);
-  if (!text) throw codedError('', 'You.com returned an empty answer.');
-  return text;
-}
-
-// Remove a code fence that wraps the reply (never ``` inside JSON string values).
-function stripFences(text) {
-  const t = stripThinking(text);
-  const whole = t.match(/^```[a-z]*[ \t]*\n?([\s\S]*?)\n?```\s*$/i);
-  if (whole) return whole[1].trim();
-  const inner = t.match(/```(?:json|javascript|js)?[ \t]*\n([\s\S]*?)\n```/i);
-  if (inner && /^\s*[[{]/.test(inner[1])) return inner[1].trim();
-  return t;
-}
-
-/**
- * Parse the first balanced JSON object/array in a string. `expect` ('{' or '[') skips the other shape,
- * so "Based on [1], here it is: {...}" returns the object. Throws if none parses.
- */
-export function extractJson(text, expect) {
-  const want = expect === '[' || expect === '{' ? expect : null;
-  const fits = (v) => !want || (want === '[' ? Array.isArray(v) : v !== null && typeof v === 'object' && !Array.isArray(v));
-  const src = stripFences(text);
-  try {
-    const whole = JSON.parse(src);
-    if (fits(whole)) return whole;
-  } catch {
-    /* scan below */
-  }
-  for (let start = 0; start < src.length; start++) {
-    const ch = src[start];
-    if (ch !== '{' && ch !== '[') continue;
-    if (want && ch !== want) continue;
-    const close = ch === '{' ? '}' : ']';
-    let depth = 0;
-    let inStr = false;
-    let esc = false;
-    for (let i = start; i < src.length; i++) {
-      const c = src[i];
-      if (inStr) {
-        if (esc) esc = false;
-        else if (c === '\\') esc = true;
-        else if (c === '"') inStr = false;
-        continue;
-      }
-      if (c === '"') inStr = true;
-      else if (c === ch) depth++;
-      else if (c === close) {
-        depth--;
-        if (depth === 0) {
-          try {
-            const v = JSON.parse(src.slice(start, i + 1));
-            if (fits(v)) return v;
-          } catch {
-            /* try the next start */
-          }
-          break;
-        }
-      }
-    }
-  }
-  throw new Error('No JSON found in the reply.');
-}
-
-/**
- * json({ system, prompt, shape, maxTokens, signal }) → parsed JSON.
- * Asks for JSON only, parses robustly, and retries once with the parse error.
- */
-export async function json({ system, prompt, shape, maxTokens = 2000, temperature, signal } = {}) {
-  const sys = [
-    system || 'You are a precise assistant.',
-    'Respond with valid JSON only: no prose, no markdown fences, no commentary before or after.',
-    shape ? `The JSON must match this shape:\n${shape}` : '',
-  ].filter(Boolean).join('\n\n');
-  const expect = shape ? String(shape).trim()[0] : undefined;
-  const messages = [{ role: 'user', content: String(prompt || '') }];
-  const first = await chat({ system: sys, messages, maxTokens, temperature, signal });
-  try {
-    return extractJson(first, expect);
-  } catch (e) {
-    const retry = await chat({
-      system: sys,
-      messages: [
-        ...messages,
-        { role: 'assistant', content: first.slice(0, 4000) },
-        { role: 'user', content: `That was not valid JSON (${e.message}). Reply again with only the JSON value, nothing else.` },
-      ],
-      maxTokens,
-      temperature,
-      signal,
-    });
-    try {
-      return extractJson(retry, expect);
-    } catch {
-      throw codedError('', 'You.com did not return a usable answer. Try again.');
-    }
-  }
 }
 
 // Warm the status check so the first real call does not wait for it.

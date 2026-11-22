@@ -3,33 +3,38 @@
 
     python3 dev/serve.py            # http://127.0.0.1:8000
     PORT=8080 python3 dev/serve.py
-    YOU_API_KEY=... python3 dev/serve.py   # optional "owner-funded" key, same as the Vercel env var
+    YOU_API_KEY=... OPENROUTER_API_KEY=... python3 dev/serve.py   # same env vars as the Vercel deployment
+    OPENROUTER_MODEL=anthropic/claude-haiku-5.5 ...                # optional; default anthropic/claude-sonnet-5.5
 
 Serves the repo root as static files (correct MIME types for ES modules) and emulates the
-Vercel function api/you.js so live mode works locally:
+Vercel functions api/you.js and api/ai.js so live mode works locally:
 
     GET  /api/you?op=status   -> {"ok": true, "envKey": bool}
     POST /api/you?op=search   -> https://ydc-index.io/v1/search            (X-API-Key)
     POST /api/you?op=extract  -> https://ydc-index.io/v1/extract           (X-API-Key)
-    POST /api/you?op=agent    -> https://api.you.com/v1/chat/completions   (Bearer; Inference Router, default)
-                                 https://api.you.com/v1/answer             (agent "answer")
-                                 https://api.you.com/v1/agents/runs        (agent "express" | "advanced" | custom id)
+    POST /api/you?op=agent    -> TEMPORARY shim for tabs still running the pre-OpenRouter client: same as POST /api/ai
+                                 (body {system?, messages | input, maxTokens?, temperature?}), never You.com inference
 
-The key comes from the browser's `x-you-key` header, else the YOU_API_KEY environment variable.
+    GET  /api/ai?op=status    -> {"ok": true, "key": bool, "model": str}
+    POST /api/ai              -> https://openrouter.ai/api/v1/chat/completions   (Bearer OPENROUTER_API_KEY)
+                                 body {system?, messages, maxTokens?, temperature?}
+                                 -> {"ok": true, "data": {"text", "model", "finishReason"}}
+                                  | {"ok": false, "status", "error", "code": "no-key"|"credits"|"rate"|"invalid"|"forbidden"|"upstream"}
+                                 Browser POSTs whose Origin / Sec-Fetch-Site show another site get 403 "forbidden".
+
+The You.com key comes from the browser's `x-you-key` header, else the YOU_API_KEY environment variable.
+The OpenRouter key comes only from OPENROUTER_API_KEY.
 Keys and request bodies are never logged. Dotfiles (.git, credentials, ...) are never served.
 
 LinkedIn (api/linkedin/*.js) is not emulated: /api/linkedin/* answers 501 JSON here, and the app reports that
 LinkedIn sign-in needs the Vercel deployment.
 """
 
-import hashlib
 import json
 import os
 import re
 import socket
 import sys
-import threading
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -39,34 +44,29 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 
 SEARCH_URL = "https://ydc-index.io/v1/search"
 EXTRACT_URL = "https://ydc-index.io/v1/extract"
-ROUTER_URL = "https://api.you.com/v1/chat/completions"
-MODELS_URL = "https://api.you.com/v1/models"
-ANSWER_URL = "https://api.you.com/v1/answer"
-AGENTS_URL = "https://api.you.com/v1/agents/runs"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_MODEL = "anthropic/claude-sonnet-5.5"
 
 MAX_BODY = 64 * 1024
+AI_MAX_BODY = 200 * 1024
 TIMEOUT_S = 55
-MODEL_CACHE_S = 600
 OPS = {"status", "search", "extract", "agent"}
+AI_MAX_MESSAGES = 200
+AI_PASS_STATUSES = {400, 401, 402, 403, 408, 413, 422, 429, 502, 503, 504}
 
 SEARCH_FIELDS = ["query", "count", "freshness", "country", "language", "include_domains", "exclude_domains",
                  "boost_domains", "offset", "safesearch", "extraction", "crawl_timeout", "knowledge", "strict_operators"]
 EXTRACT_FIELDS = ["url", "full_page", "extraction_source", "timeout", "parse_effort"]
-ANSWER_FIELDS = ["freshness", "country", "language", "safesearch", "include_domains", "exclude_domains", "boost_domains"]
-MODEL_PREFERENCE = [r"claude.*sonnet", r"claude", r"^gpt-5", r"^gpt", r"gemini.*pro", r"gemini", r"kimi", r"deepseek",
-                    r"qwen", r"glm", r"llama", r"mistral"]
-
 USER_AGENT = "Lens-dev-relay/1.0"
-_model_cache = {}
-_model_lock = threading.Lock()
 
 
 class RelayError(Exception):
-    def __init__(self, status, message, detail=None):
+    def __init__(self, status, message, detail=None, code=None):
         super().__init__(message)
         self.status = status
         self.message = message
         self.detail = detail
+        self.code = code
 
 
 def pick(obj, fields):
@@ -109,12 +109,8 @@ def upstream_message(status, body, text):
     return prefix + "."
 
 
-def call_you(url, key, body=None, method="POST", auth="x-api-key"):
-    headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
-    if auth == "bearer":
-        headers["Authorization"] = "Bearer " + key
-    else:
-        headers["X-API-Key"] = key
+def call_you(url, key, body=None, method="POST"):
+    headers = {"Accept": "application/json", "User-Agent": USER_AGENT, "X-API-Key": key}
     data = None
     if body is not None:
         headers["Content-Type"] = "application/json"
@@ -167,189 +163,157 @@ def op_extract(key, body):
     return call_you(EXTRACT_URL, key, payload)
 
 
-def list_models(key):
-    h = hashlib.sha256(key.encode("utf-8")).hexdigest()
-    with _model_lock:
-        hit = _model_cache.get(h)
-        if hit and time.time() - hit[0] < MODEL_CACHE_S:
-            return hit[1]
-    out = call_you(MODELS_URL, key, method="GET", auth="bearer")
-    models = []
-    for m in (out.get("data") or []) if isinstance(out, dict) else []:
-        if not isinstance(m, dict) or not isinstance(m.get("id"), str):
-            continue
-        caps = m.get("capabilities")
-        outputs = caps.get("output") if isinstance(caps, dict) else None
-        if isinstance(outputs, list) and "text" not in outputs:
-            continue
-        mt = m.get("max_tokens")
-        models.append({"id": m["id"], "maxTokens": mt if isinstance(mt, int) else None})
-    with _model_lock:
-        _model_cache[h] = (time.time(), models)
-    return models
+# ------------------------------------------------------------------ AI (mirrors api/ai.js)
+
+def ai_model():
+    return (os.environ.get("OPENROUTER_MODEL") or "").strip() or DEFAULT_MODEL
 
 
-def rank_models(models):
-    def rank(mid):
-        for i, pat in enumerate(MODEL_PREFERENCE):
-            if re.search(pat, mid, re.I):
-                return i
-        return len(MODEL_PREFERENCE)
-    return sorted(models, key=lambda m: rank(m["id"]))
+def ai_key():
+    return (os.environ.get("OPENROUTER_API_KEY") or "").strip()
 
 
-def to_messages(body):
-    out = []
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and v not in (float("inf"), float("-inf"))
+
+
+def ai_payload(body):
     system = body.get("system")
+    if system is not None and not isinstance(system, str):
+        raise RelayError(400, '"system" must be a string.', code="invalid")
+    msgs = body.get("messages")
+    if not isinstance(msgs, list) or not msgs:
+        raise RelayError(400, '"messages" must be a non-empty array of { role, content }.', code="invalid")
+    if len(msgs) > AI_MAX_MESSAGES:
+        raise RelayError(400, "At most %d messages." % AI_MAX_MESSAGES, code="invalid")
+    messages = []
     if isinstance(system, str) and system.strip():
-        out.append({"role": "system", "content": system.strip()})
-    for m in body.get("messages") or []:
+        messages.append({"role": "system", "content": system.strip()})
+    for m in msgs:
         if not isinstance(m, dict):
-            continue
+            raise RelayError(400, "Each message must be an object { role, content }.", code="invalid")
+        if m.get("role") not in ("user", "assistant"):
+            raise RelayError(400, 'Message roles must be "user" or "assistant" (send the system prompt as "system").', code="invalid")
         content = m.get("content")
         if not isinstance(content, str) or not content.strip():
-            continue
-        out.append({"role": "assistant" if m.get("role") == "assistant" else "user", "content": content})
-    if not any(m["role"] != "system" for m in out):
-        inp = body.get("input")
-        inp = inp.strip() if isinstance(inp, str) else ""
-        if not inp:
-            raise RelayError(400, 'The agent needs "input" or "messages".')
-        out.append({"role": "user", "content": inp})
-    return out
-
-
-def run_router(key, body):
-    messages = to_messages(body)
-    requested = body.get("model") if isinstance(body.get("model"), str) else ""
-    requested = (requested or os.environ.get("YOU_MODEL", "")).strip()
-    if requested:
-        candidates = [{"id": requested, "maxTokens": None}]
-    else:
-        models = rank_models(list_models(key))
-        if not models:
-            raise RelayError(403, "This You.com key has no Inference Router models available. Check your plan at you.com/platform.")
-        candidates = models[:2]
-    try:
-        wanted = int(body.get("maxTokens") or 1500)
-    except (TypeError, ValueError):
-        wanted = 1500
-    # Reasoning tokens count toward max_tokens: floor at 4096, ask for low effort, and retry once with a
-    # doubled limit if the reply is still empty for lack of room (mirrors api/you.js).
-    wanted = max(4096, min(16000, wanted))
-    effort = body.get("reasoningEffort") if body.get("reasoningEffort") in REASONING_EFFORTS else "low"
-    last = None
-    for m in candidates:
+            raise RelayError(400, 'Each message needs non-empty string "content".', code="invalid")
+        messages.append({"role": m["role"], "content": content})
+    if not any(m["role"] == "user" for m in messages):
+        raise RelayError(400, '"messages" needs at least one user message.', code="invalid")
+    max_tokens = 1500
+    mt = body.get("maxTokens")
+    if mt is not None:
         try:
-            return router_call(key, body, messages, m, wanted, effort)
-        except RelayError as e:
-            last = e
-            if requested or e.status not in (400, 403, 404):
-                raise
-    raise last
+            mt = float(mt)
+        except (TypeError, ValueError):
+            raise RelayError(400, '"maxTokens" must be a number.', code="invalid")
+        if not _num(mt):
+            raise RelayError(400, '"maxTokens" must be a number.', code="invalid")
+        max_tokens = int(min(8000, max(64, round(mt))))
+    payload = {"model": ai_model(), "messages": messages, "max_tokens": max_tokens, "stream": False}
+    t = body.get("temperature")
+    if t is not None:
+        if not _num(t):
+            raise RelayError(400, '"temperature" must be a number.', code="invalid")
+        payload["temperature"] = min(1.5, max(0.0, float(t)))
+    return payload
 
 
-REASONING_EFFORTS = ("minimal", "low", "medium", "high")
+def ai_error_detail(body, text):
+    if isinstance(body, dict):
+        e = body.get("error")
+        if isinstance(e, dict) and isinstance(e.get("message"), str):
+            return e["message"][:300]
+        if isinstance(e, str):
+            return e[:300]
+        if isinstance(body.get("message"), str):
+            return body["message"][:300]
+    # Raw (non-JSON) bodies are only used when they are plain text: an HTML error page never reaches the user.
+    if not text or re.match(r"^\s*<", text) or re.search(r"<(html|head|body|title)[\s>]", text, re.I):
+        return ""
+    return " ".join(text.split())[:200]
 
 
-def router_call(key, body, messages, m, wanted, effort):
-    cap = m["maxTokens"] or 32000
-    max_tokens = min(wanted, cap)
-    send_effort = True
-    grew = False
-    while True:
-        payload = {"model": m["id"], "messages": messages, "stream": False, "max_tokens": max_tokens}
-        if send_effort:
-            payload["reasoning_effort"] = effort
-        if isinstance(body.get("temperature"), (int, float)) and not isinstance(body.get("temperature"), bool):
-            payload["temperature"] = body["temperature"]
-        if body.get("webSearch"):
-            payload["tools"] = [{"type": "web_search", "max_search_rounds": 2}]
-        try:
-            out = call_you(ROUTER_URL, key, payload, auth="bearer")
-        except RelayError as e:
-            if send_effort and e.status in (400, 422):
-                send_effort = False  # a model that rejects reasoning_effort: retry once without it
-                continue
-            raise
-        choices = out.get("choices") if isinstance(out, dict) else None
-        choice = choices[0] if isinstance(choices, list) and choices else {}
-        msg = choice.get("message") or {}
-        text = msg.get("content") if isinstance(msg.get("content"), str) else ""
-        text = text.strip()
-        if not text:
-            if msg.get("refusal"):
-                raise RelayError(422, "The model declined: %s" % msg["refusal"])
-            if choice.get("finish_reason") == "length":
-                if not grew and max_tokens < cap:
-                    grew = True
-                    max_tokens = min(max_tokens * 2, cap)
-                    continue
-                raise RelayError(422, "The model ran out of room before answering. Try a shorter request.")
-            raise RelayError(502, "The model returned an empty answer.")
-        return {
-            "provider": "router",
-            "agent": "router",
-            "model": out.get("model") or m["id"],
-            "text": text,
-            "finishReason": choice.get("finish_reason"),
-            "webResults": out.get("web_results"),
-            "usage": out.get("usage"),
-        }
+def ai_upstream_error(status, detail):
+    if status == 402:
+        return RelayError(402, "OpenRouter is out of credits.", code="credits")
+    if status == 429:
+        return RelayError(429, "OpenRouter rate limit reached. Try again in a minute.", code="rate")
+    prefix = {
+        400: "OpenRouter could not process the request",
+        401: "OpenRouter rejected the API key",
+        403: "OpenRouter refused the request",
+        408: "OpenRouter timed out",
+        502: "The AI model is unavailable right now",
+        503: "No AI provider is available right now",
+    }.get(status, "OpenRouter request failed (HTTP %d)" % status)
+    message = "%s: %s" % (prefix, detail) if detail and detail not in prefix else prefix + "."
+    return RelayError(status if status in AI_PASS_STATUSES else 502, message, code="upstream")
 
 
-def run_answer(key, body):
-    query = str(body.get("input") or "").strip()
-    if not query:
-        raise RelayError(400, 'The Answer API needs "input".')
-    if len(query) > 400:
-        raise RelayError(400, "The Answer API accepts at most 400 characters of input.")
-    payload = {"query": query}
-    payload.update(pick(body, ANSWER_FIELDS))
-    out = call_you(ANSWER_URL, key, payload)
-    return {
-        "provider": "answer",
-        "agent": "answer",
-        "text": str(out.get("answer") or "").strip(),
-        "citations": out.get("citations") if isinstance(out.get("citations"), list) else [],
-        "webResults": out.get("results"),
+def _error_status(err):
+    code = err.get("code") if isinstance(err, dict) else None
+    return code if isinstance(code, int) and not isinstance(code, bool) and 400 <= code < 600 else 502
+
+
+def ai_chat(key, payload, origin):
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + key,
+        "X-Title": "Lens",
+        "User-Agent": USER_AGENT,
     }
-
-
-def run_legacy_agent(key, body, agent):
-    inp = str(body.get("input") or "").strip()
-    if not inp:
-        inp = "\n\n".join("%s:\n%s" % (m["role"].upper(), m["content"]) for m in to_messages(body))
+    if origin:
+        headers["HTTP-Referer"] = origin
+    req = urllib.request.Request(OPENROUTER_URL, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
     try:
-        out = call_you(AGENTS_URL, key, {"agent": agent, "input": inp, "stream": False}, auth="bearer")
-    except RelayError as e:
-        if e.status in (404, 410):
-            return run_router(key, body)
-        raise
-    items = out.get("output") if isinstance(out.get("output"), list) else []
-    parts = []
-    for o in items:
-        if isinstance(o, dict):
-            if isinstance(o.get("text"), str):
-                parts.append(o["text"])
-            elif isinstance(o.get("content"), str):
-                parts.append(o["content"])
-    text = "\n\n".join(p for p in parts if p).strip()
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+            status = resp.status
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", "replace") if e.fp else ""
+        status = e.code
+    except (socket.timeout, TimeoutError):
+        raise RelayError(504, "The AI took too long to respond (55 s). Try again.", code="upstream")
+    except urllib.error.URLError as e:
+        if isinstance(getattr(e, "reason", None), (socket.timeout, TimeoutError)):
+            raise RelayError(504, "The AI took too long to respond (55 s). Try again.", code="upstream")
+        raise RelayError(502, "Could not reach OpenRouter from the dev server. Check your network.", code="upstream")
+    try:
+        out = json.loads(raw) if raw else None
+    except ValueError:
+        out = None
+    if status < 200 or status >= 300:
+        raise ai_upstream_error(status, ai_error_detail(out, "" if out is not None else raw))
+    if not isinstance(out, dict):
+        raise RelayError(502, "OpenRouter returned a response the server could not read.", code="upstream")
+    # Errors after generation started can arrive with HTTP 200.
+    if out.get("error") and not isinstance(out.get("choices"), list):
+        raise ai_upstream_error(_error_status(out.get("error")), ai_error_detail(out, ""))
+    choices = out.get("choices") if isinstance(out.get("choices"), list) else []
+    choice = choices[0] if choices and isinstance(choices[0], dict) else None
+    if choice is None:
+        raise RelayError(502, "OpenRouter returned no answer.", code="upstream")
+    finish = choice.get("finish_reason") or choice.get("native_finish_reason")
+    if finish == "error" or choice.get("error"):
+        err = choice.get("error") if isinstance(choice.get("error"), dict) else {}
+        msg = err.get("message") if isinstance(err.get("message"), str) else ""
+        raise ai_upstream_error(_error_status(err), msg[:300])
+    msg = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+    content = msg.get("content")
+    if isinstance(content, list):
+        content = "".join(p.get("text", "") if isinstance(p, dict) and isinstance(p.get("text"), str) else (p if isinstance(p, str) else "") for p in content)
+    text = content.strip() if isinstance(content, str) else ""
     if not text:
-        raise RelayError(502, "The You.com agent returned an empty answer.")
-    return {"provider": "agents", "agent": agent, "text": text, "output": items}
-
-
-def op_agent(key, body):
-    agent = body.get("agent")
-    agent = agent.strip() if isinstance(agent, str) else ""
-    if agent in ("", "router", "chat"):
-        return run_router(key, body)
-    if agent == "answer":
-        return run_answer(key, body)
-    if not re.match(r"^[A-Za-z0-9_-]{1,64}$", agent):
-        raise RelayError(400, "Unknown agent id.")
-    return run_legacy_agent(key, body, agent)
+        refusal = msg.get("refusal")
+        if isinstance(refusal, str) and refusal.strip():
+            raise RelayError(422, "The model declined: %s" % refusal.strip()[:300], code="upstream")
+        if finish == "length":
+            raise RelayError(422, "The model ran out of room before answering. Try a shorter request.", code="upstream")
+        raise RelayError(502, "The model returned an empty answer.", code="upstream")
+    model = out.get("model") if isinstance(out.get("model"), str) and out.get("model") else payload["model"]
+    return {"text": text, "model": model, "finishReason": finish}
 
 
 # ------------------------------------------------------------------ server
@@ -407,9 +371,12 @@ class LensHandler(SimpleHTTPRequestHandler):
     def _is_api(self, path):
         return path == "/api/you" or path.startswith("/api/you/") or path == "/api/you.js"
 
+    def _is_ai(self, path):
+        return path in ("/api/ai", "/api/ai/", "/api/ai.js")
+
     def do_OPTIONS(self):
         path, _ = self._route()
-        if self._is_api(path):
+        if self._is_api(path) or self._is_ai(path):
             self.send_response(204)
             self.send_header("Allow", "GET, POST, OPTIONS")
             self.send_header("Content-Length", "0")
@@ -429,7 +396,7 @@ class LensHandler(SimpleHTTPRequestHandler):
         # LINKEDIN_CLIENT_ID/SECRET and an HTTPS callback; this dev server does not emulate them.
         if path == "/api/linkedin" or path.startswith("/api/linkedin/"):
             self._send_json(501, {"ok": False, "connected": False,
-                                  "error": "LinkedIn needs the Vercel deployment (dev/serve.py only serves /api/you)."})
+                                  "error": "LinkedIn needs the Vercel deployment (dev/serve.py only serves /api/you and /api/ai)."})
             return True
         return False
 
@@ -437,6 +404,9 @@ class LensHandler(SimpleHTTPRequestHandler):
         path, query = self._route()
         if self._is_api(path):
             self._api("GET", query)
+            return
+        if self._is_ai(path):
+            self._ai("GET", query)
             return
         if self._linkedin(path):
             return
@@ -450,38 +420,104 @@ class LensHandler(SimpleHTTPRequestHandler):
         if self._is_api(path):
             self._api("POST", query)
             return
+        if self._is_ai(path):
+            self._ai("POST", query)
+            return
         if self._linkedin(path):
             return
         self.send_error(405)
 
-    def _read_body(self):
+    def _read_body(self, limit=MAX_BODY, code=None, allow_empty=True):
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = 0
-        if length > MAX_BODY:
-            raise RelayError(413, "Request body is too large (64 KB max).")
+        if length > limit:
+            raise RelayError(413, "Request body is too large (%d KB max)." % (limit // 1024), code=code)
         raw = self.rfile.read(length) if length > 0 else b""
         if not raw.strip():
-            return {}
+            if allow_empty:
+                return {}
+            raise RelayError(400, "Request body must be a JSON object.", code=code)
         try:
             body = json.loads(raw.decode("utf-8"))
         except ValueError:
-            raise RelayError(400, "Request body must be a JSON object.")
+            raise RelayError(400, "Request body must be a JSON object.", code=code)
         if not isinstance(body, dict):
-            raise RelayError(400, "Request body must be a JSON object.")
+            raise RelayError(400, "Request body must be a JSON object.", code=code)
         return body
+
+    def _origin(self):
+        host = (self.headers.get("Host") or "").strip()
+        return "http://" + host if re.match(r"^[A-Za-z0-9.-]+(:\d{1,5})?$", host) else ""
+
+    def _assert_same_origin(self):
+        site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        forbidden = RelayError(403, "Lens AI only answers requests from the Lens app itself.", code="forbidden")
+        if site and site not in ("same-origin", "none"):
+            raise forbidden
+        origin = (self.headers.get("Origin") or "").strip()
+        if not origin:
+            return
+        try:
+            origin_host = (urllib.parse.urlsplit(origin).netloc or "").lower()
+        except ValueError:
+            origin_host = ""
+        host = (self.headers.get("Host") or "").strip().lower()
+        if not origin_host or not host or origin_host != host:
+            raise forbidden
+
+    def _ai_post(self, body_to_request):
+        try:
+            self._assert_same_origin()
+            body = self._read_body(AI_MAX_BODY, code="invalid", allow_empty=False)
+            payload = ai_payload(body_to_request(body))
+            key = ai_key()
+            if not key:
+                raise RelayError(500, "AI isn't configured on this deployment (OPENROUTER_API_KEY).", code="no-key")
+            data = ai_chat(key, payload, self._origin())
+            self._send_json(200, {"ok": True, "data": data})
+        except RelayError as e:
+            if e.code != "invalid":
+                sys.stderr.write("[ai-relay] failed with status %d (%s)\n" % (e.status, e.code or "upstream"))
+            self._send_json(e.status, {"ok": False, "status": e.status, "error": e.message, "code": e.code or "upstream"})
+        except Exception as e:  # noqa: BLE001 — never leak internals (or keys) to the client
+            sys.stderr.write("[ai-relay] crashed: %s\n" % type(e).__name__)
+            self._send_json(500, {"ok": False, "status": 500, "error": "The AI relay hit an unexpected error.", "code": "upstream"})
+
+    def _ai(self, method, query):
+        if method == "GET":
+            if (query.get("op") or [""])[0] != "status":
+                self._send_json(400, {"ok": False, "status": 400, "error": "Use GET /api/ai?op=status, or POST a chat request.", "code": "invalid"})
+                return
+            self._send_json(200, {"ok": True, "key": bool(ai_key()), "model": ai_model()})
+            return
+        self._ai_post(lambda body: body)
+
+    @staticmethod
+    def _agent_body(body):
+        # Temporary op=agent shim: old clients send {system, messages | input, maxTokens, temperature}.
+        msgs = body.get("messages")
+        if not (isinstance(msgs, list) and msgs):
+            inp = body.get("input")
+            if isinstance(inp, str) and inp.strip():
+                msgs = [{"role": "user", "content": inp}]
+        return {"system": body.get("system"), "messages": msgs,
+                "maxTokens": body.get("maxTokens"), "temperature": body.get("temperature")}
 
     def _api(self, method, query):
         op = (query.get("op") or [""])[0]
         if op not in OPS:
-            self._fail(400, "Unknown op. Use status, search, extract or agent.")
+            self._fail(400, "Unknown op. Use status, search or extract (AI calls use /api/ai; reload Lens if it is out of date).")
             return
         if op == "status":
             self._send_json(200, {"ok": True, "envKey": bool(os.environ.get("YOU_API_KEY"))})
             return
         if method != "POST":
             self._fail(405, "Use POST for op=%s." % op)
+            return
+        if op == "agent":
+            self._ai_post(self._agent_body)
             return
         key = (self.headers.get("x-you-key") or "").strip() or (os.environ.get("YOU_API_KEY") or "").strip()
         try:
@@ -490,10 +526,8 @@ class LensHandler(SimpleHTTPRequestHandler):
                 raise RelayError(400, "No You.com API key. Add yours in Settings \u2192 Connections, or set YOU_API_KEY before starting dev/serve.py.")
             if op == "search":
                 data = op_search(key, body)
-            elif op == "extract":
-                data = op_extract(key, body)
             else:
-                data = op_agent(key, body)
+                data = op_extract(key, body)
             self._send_json(200, {"ok": True, "data": data})
         except RelayError as e:
             sys.stderr.write("[you-relay] op=%s failed with status %d\n" % (op, e.status))
@@ -514,6 +548,7 @@ def main():
     shown = "localhost" if host in ("127.0.0.1", "0.0.0.0") else host
     print("Lens dev server: http://%s:%d  (serving %s)" % (shown, port, ROOT))
     print("You.com relay at /api/you \u2014 env key %s" % ("set" if os.environ.get("YOU_API_KEY") else "not set (users bring their own key)"))
+    print("AI relay at /api/ai \u2014 OPENROUTER_API_KEY %s, model %s" % ("set" if ai_key() else "not set", ai_model()))
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

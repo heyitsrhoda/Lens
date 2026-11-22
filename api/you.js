@@ -1,47 +1,32 @@
-// api/you.js — Lens's single, stateless You.com relay (Vercel Node serverless function).
+// api/you.js — Lens's stateless You.com search/extract relay (Vercel Node serverless function).
 //
 //   GET  /api/you?op=status            → { ok: true, envKey: boolean }
 //   POST /api/you?op=search   (JSON)   → You.com Web Search   POST https://ydc-index.io/v1/search   (X-API-Key)
 //   POST /api/you?op=extract  (JSON)   → You.com Extract      POST https://ydc-index.io/v1/extract  (X-API-Key)
-//   POST /api/you?op=agent    (JSON)   → LLM answer, see below
 //
-// op=agent, checked against the You.com docs (you.com/docs, OpenAPI specs under /docs/openapi/*):
-//   - default            → Inference Router  POST https://api.you.com/v1/chat/completions
-//                          (Authorization: Bearer <key>; OpenAI Chat Completions body { model, messages, max_tokens, stream:false };
-//                          response choices[0].message.content). `model` is required by the API: we use the request's
-//                          `model`, else env YOU_MODEL, else pick one from GET https://api.you.com/v1/models for that key.
-//   - agent: 'answer'    → Answer API        POST https://api.you.com/v1/answer (X-API-Key; { query ≤ 400 chars };
-//                          response { answer, citations[{source, excerpts}], results.web[] }).
-//   - agent: 'express' | 'advanced' | <custom agent id>
-//                        → legacy Agents API POST https://api.you.com/v1/agents/runs (Bearer; { agent, input, stream:false };
-//                          response output[{ type, text }]). If You.com no longer serves it (404/410), the Inference Router answers.
+// AI (LLM) calls do not go through here: they use api/ai.js (OpenRouter).
 //
-// Key: header `x-you-key` (the user's own key from Settings), else process.env.YOU_API_KEY (owner-funded), else 400.
+//   POST /api/you?op=agent    (JSON)   → TEMPORARY shim for browser tabs still running the pre-OpenRouter client
+//                                        (js/services/you.js used to send AI calls here). Body { system?, messages | input,
+//                                        maxTokens?, temperature? } goes to OpenRouter through the same logic as api/ai.js
+//                                        (api/_lib/openrouter.js; never You.com inference) and answers the old shape
+//                                        { ok: true, data: { text, model, finishReason } }. Remove once old tabs have aged out.
+//
+// Key: header `x-you-key` (a developer's own key), else process.env.YOU_API_KEY (owner-funded), else 400.
 // Never logs keys or bodies. Only these ops are allowed (not an open proxy). Body limit 64 KB. Upstream timeout 55 s.
 // Response envelope: { ok: true, data } or { ok: false, status, error, detail? } with the upstream status code passed through.
 
-import { createHash } from 'node:crypto';
-
 const SEARCH_URL = 'https://ydc-index.io/v1/search';
 const EXTRACT_URL = 'https://ydc-index.io/v1/extract';
-const ROUTER_URL = 'https://api.you.com/v1/chat/completions';
-const MODELS_URL = 'https://api.you.com/v1/models';
-const ANSWER_URL = 'https://api.you.com/v1/answer';
-const AGENTS_URL = 'https://api.you.com/v1/agents/runs';
+
+import { AI_MAX_BODY, AiError, assertSameOrigin, relayChat } from './_lib/openrouter.js';
 
 const MAX_BODY = 64 * 1024;
 const TIMEOUT_MS = 55000;
-const MODEL_CACHE_MS = 10 * 60 * 1000;
 const OPS = new Set(['status', 'search', 'extract', 'agent']);
 
 const SEARCH_FIELDS = ['query', 'count', 'freshness', 'country', 'language', 'include_domains', 'exclude_domains', 'boost_domains', 'offset', 'safesearch', 'extraction', 'crawl_timeout', 'knowledge', 'strict_operators'];
 const EXTRACT_FIELDS = ['url', 'full_page', 'extraction_source', 'timeout', 'parse_effort'];
-const ANSWER_FIELDS = ['freshness', 'country', 'language', 'safesearch', 'include_domains', 'exclude_domains', 'boost_domains'];
-
-// Preferred general-purpose chat models, in order, when the request does not name one.
-const MODEL_PREFERENCE = [/claude.*sonnet/i, /claude/i, /^gpt-5/i, /^gpt/i, /gemini.*pro/i, /gemini/i, /kimi/i, /deepseek/i, /qwen/i, /glm/i, /llama/i, /mistral/i];
-
-const modelCache = new Map(); // sha256(key) → { at, models: [{ id, maxTokens }] }
 
 // ------------------------------------------------------------------ http helpers
 
@@ -81,9 +66,10 @@ function queryOp(req) {
   }
 }
 
-async function readBody(req) {
+async function readBody(req, limit = MAX_BODY) {
+  const tooLarge = `Request body is too large (${Math.round(limit / 1024)} KB max).`;
   const declared = Number(header(req, 'content-length') || 0);
-  if (declared > MAX_BODY) throw new RelayError(413, 'Request body is too large (64 KB max).');
+  if (declared > limit) throw new RelayError(413, tooLarge);
   // Vercel's Node runtime pre-parses JSON bodies into req.body (its getter throws on invalid JSON);
   // fall back to reading the stream when no parsed body is available.
   let pre;
@@ -95,18 +81,18 @@ async function readBody(req) {
   if (pre !== undefined && pre !== null) {
     if (typeof pre === 'object' && !Buffer.isBuffer(pre)) {
       if (Array.isArray(pre)) throw new RelayError(400, 'Request body must be a JSON object.');
-      if (JSON.stringify(pre).length > MAX_BODY) throw new RelayError(413, 'Request body is too large (64 KB max).');
+      if (JSON.stringify(pre).length > limit) throw new RelayError(413, tooLarge);
       return pre;
     }
     const text = Buffer.isBuffer(pre) ? pre.toString('utf8') : String(pre);
-    if (text.length > MAX_BODY) throw new RelayError(413, 'Request body is too large (64 KB max).');
+    if (text.length > limit) throw new RelayError(413, tooLarge);
     return parseJson(text);
   }
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_BODY) throw new RelayError(413, 'Request body is too large (64 KB max).');
+    if (size > limit) throw new RelayError(413, tooLarge);
     chunks.push(chunk);
   }
   return parseJson(Buffer.concat(chunks).toString('utf8'));
@@ -156,10 +142,8 @@ function upstreamMessage(status, body, fallbackText) {
   return detail && !prefix.includes(detail) ? `${prefix}: ${detail}` : `${prefix}.`;
 }
 
-async function callYou(url, { method = 'POST', key, auth = 'x-api-key', body }) {
-  const headers = { Accept: 'application/json' };
-  if (auth === 'bearer') headers.Authorization = `Bearer ${key}`;
-  else headers['X-API-Key'] = key;
+async function callYou(url, { method = 'POST', key, body }) {
+  const headers = { Accept: 'application/json', 'X-API-Key': key };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -199,170 +183,34 @@ async function opExtract(key, body) {
   return callYou(EXTRACT_URL, { key, body: payload });
 }
 
-function keyHash(key) {
-  return createHash('sha256').update(key).digest('hex');
+// Temporary: old clients' AI calls → OpenRouter (see the header). Accepts `messages`, or a plain `input` string.
+async function opAgent(req, body) {
+  const messages = Array.isArray(body.messages) && body.messages.length
+    ? body.messages
+    : typeof body.input === 'string' && body.input.trim() ? [{ role: 'user', content: body.input }] : body.messages;
+  return relayChat(req, { system: body.system, messages, maxTokens: body.maxTokens, temperature: body.temperature });
 }
 
-async function listModels(key) {
-  const h = keyHash(key);
-  const hit = modelCache.get(h);
-  if (hit && Date.now() - hit.at < MODEL_CACHE_MS) return hit.models;
-  const out = await callYou(MODELS_URL, { method: 'GET', key, auth: 'bearer' });
-  const data = Array.isArray(out && out.data) ? out.data : [];
-  const models = data
-    .filter((m) => m && typeof m.id === 'string')
-    .filter((m) => {
-      const outputs = m.capabilities && Array.isArray(m.capabilities.output) ? m.capabilities.output : null;
-      return !outputs || outputs.includes('text');
-    })
-    .map((m) => ({ id: m.id, maxTokens: typeof m.max_tokens === 'number' ? m.max_tokens : null }));
-  modelCache.set(h, { at: Date.now(), models });
-  if (modelCache.size > 200) modelCache.delete(modelCache.keys().next().value);
-  return models;
-}
-
-function rankModels(models) {
-  const rank = (id) => {
-    const i = MODEL_PREFERENCE.findIndex((re) => re.test(id));
-    return i === -1 ? MODEL_PREFERENCE.length : i;
-  };
-  return models.slice().sort((a, b) => rank(a.id) - rank(b.id));
-}
-
-function toMessages(body) {
-  const out = [];
-  const system = typeof body.system === 'string' ? body.system.trim() : '';
-  if (system) out.push({ role: 'system', content: system });
-  const msgs = Array.isArray(body.messages) ? body.messages : [];
-  for (const m of msgs) {
-    if (!m || typeof m.content !== 'string' || !m.content.trim()) continue;
-    out.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content });
-  }
-  if (!out.some((m) => m.role !== 'system')) {
-    const input = typeof body.input === 'string' ? body.input.trim() : '';
-    if (!input) throw new RelayError(400, 'The agent needs "input" or "messages".');
-    out.push({ role: 'user', content: input });
-  }
-  return out;
-}
-
-async function runRouter(key, body) {
-  const messages = toMessages(body);
-  const requested = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : (process.env.YOU_MODEL || '').trim();
-  let candidates;
-  if (requested) {
-    candidates = [{ id: requested, maxTokens: null }];
-  } else {
-    const models = rankModels(await listModels(key));
-    if (!models.length) throw new RelayError(403, 'This You.com key has no Inference Router models available. Check your plan at you.com/platform.');
-    candidates = models.slice(0, 2);
-  }
-  // Reasoning tokens count toward max_tokens, so a small limit can leave a reasoning model with an empty
-  // reply (finish_reason 'length'). Floor at 4096, ask for low reasoning effort, and retry once with a
-  // doubled limit if the reply is still empty for lack of room.
-  const wanted = Math.max(4096, Math.min(16000, Number(body.maxTokens) || 1500));
-  const effort = REASONING_EFFORTS.includes(body.reasoningEffort) ? body.reasoningEffort : 'low';
-  let lastErr = null;
-  for (const m of candidates) {
+async function handleAgent(req, res) {
+  try {
+    assertSameOrigin(req);
+    let body;
     try {
-      return await routerCall(key, body, messages, m, wanted, effort);
+      body = await readBody(req, AI_MAX_BODY);
     } catch (e) {
-      lastErr = e;
-      // Only an auto-picked model that this key cannot use is worth one more try with the next candidate.
-      if (requested || !(e instanceof RelayError) || ![400, 403, 404].includes(e.status)) throw e;
-    }
-  }
-  throw lastErr;
-}
-
-const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high'];
-
-async function routerCall(key, body, messages, m, wanted, effort) {
-  const cap = m.maxTokens || 32000;
-  let maxTokens = Math.min(wanted, cap);
-  let sendEffort = true;
-  let grew = false;
-  for (;;) {
-    const payload = { model: m.id, messages, stream: false, max_tokens: maxTokens };
-    if (sendEffort) payload.reasoning_effort = effort;
-    if (typeof body.temperature === 'number') payload.temperature = body.temperature;
-    if (body.webSearch) payload.tools = [{ type: 'web_search', max_search_rounds: 2 }];
-    let out;
-    try {
-      out = await callYou(ROUTER_URL, { key, auth: 'bearer', body: payload });
-    } catch (e) {
-      // A model that rejects reasoning_effort: retry once without it.
-      if (sendEffort && e instanceof RelayError && (e.status === 400 || e.status === 422)) {
-        sendEffort = false;
-        continue;
-      }
+      if (e instanceof RelayError) throw new AiError(e.status, e.message, 'invalid');
       throw e;
     }
-    const choice = Array.isArray(out.choices) ? out.choices[0] : null;
-    const msg = (choice && choice.message) || {};
-    const text = typeof msg.content === 'string' ? msg.content.trim() : '';
-    if (!text) {
-      if (msg.refusal) throw new RelayError(422, `The model declined: ${msg.refusal}`);
-      if (choice && choice.finish_reason === 'length') {
-        if (!grew && maxTokens < cap) {
-          grew = true;
-          maxTokens = Math.min(maxTokens * 2, cap);
-          continue;
-        }
-        throw new RelayError(422, 'The model ran out of room before answering. Try a shorter request.');
-      }
-      throw new RelayError(502, 'The model returned an empty answer.');
-    }
-    return {
-      provider: 'router',
-      agent: 'router',
-      model: out.model || m.id,
-      text,
-      finishReason: (choice && choice.finish_reason) || null,
-      webResults: out.web_results || null,
-      usage: out.usage || null,
-    };
-  }
-}
-
-async function runAnswer(key, body) {
-  const query = String(body.input || '').trim();
-  if (!query) throw new RelayError(400, 'The Answer API needs "input".');
-  if (query.length > 400) throw new RelayError(400, 'The Answer API accepts at most 400 characters of input.');
-  const out = await callYou(ANSWER_URL, { key, body: { query, ...pick(body, ANSWER_FIELDS) } });
-  return {
-    provider: 'answer',
-    agent: 'answer',
-    text: String(out.answer || '').trim(),
-    citations: Array.isArray(out.citations) ? out.citations : [],
-    webResults: out.results || null,
-  };
-}
-
-async function runLegacyAgent(key, body, agent) {
-  const input = String(body.input || '').trim() || toMessages(body).map((m) => `${m.role.toUpperCase()}:\n${m.content}`).join('\n\n');
-  try {
-    const out = await callYou(AGENTS_URL, { key, auth: 'bearer', body: { agent, input, stream: false } });
-    const items = Array.isArray(out.output) ? out.output : [];
-    const text = items
-      .map((o) => (o && typeof o.text === 'string' ? o.text : o && typeof o.content === 'string' ? o.content : ''))
-      .filter(Boolean)
-      .join('\n\n')
-      .trim();
-    if (!text) throw new RelayError(502, 'The You.com agent returned an empty answer.');
-    return { provider: 'agents', agent, text, output: items };
+    const data = await opAgent(req, body);
+    return send(res, 200, { ok: true, data });
   } catch (e) {
-    if (e instanceof RelayError && (e.status === 404 || e.status === 410)) return runRouter(key, body);
-    throw e;
+    if (e instanceof AiError) {
+      if (e.code !== 'invalid') console.warn(`[you-relay] op=agent (OpenRouter) failed with status ${e.status} (${e.code})`);
+      return send(res, e.status, { ok: false, status: e.status, error: e.message, code: e.code });
+    }
+    console.error(`[you-relay] op=agent crashed: ${e && e.name ? e.name : 'Error'}`);
+    return send(res, 500, { ok: false, status: 500, error: 'The AI relay hit an unexpected error.', code: 'upstream' });
   }
-}
-
-async function opAgent(key, body) {
-  const agent = typeof body.agent === 'string' ? body.agent.trim() : '';
-  if (!agent || agent === 'router' || agent === 'chat') return runRouter(key, body);
-  if (agent === 'answer') return runAnswer(key, body);
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(agent)) throw new RelayError(400, 'Unknown agent id.');
-  return runLegacyAgent(key, body, agent);
 }
 
 // ------------------------------------------------------------------ handler
@@ -376,7 +224,7 @@ export default async function handler(req, res) {
     return;
   }
   const op = queryOp(req);
-  if (!OPS.has(op)) return fail(res, 400, 'Unknown op. Use status, search, extract or agent.');
+  if (!OPS.has(op)) return fail(res, 400, 'Unknown op. Use status, search or extract (AI calls use /api/ai; reload Lens if it is out of date).');
 
   if (op === 'status') {
     if (method !== 'GET' && method !== 'POST') return fail(res, 405, 'Use GET for op=status.');
@@ -386,6 +234,7 @@ export default async function handler(req, res) {
     res.setHeader('Allow', 'POST, OPTIONS');
     return fail(res, 405, `Use POST for op=${op}.`);
   }
+  if (op === 'agent') return handleAgent(req, res);
 
   const userKey = String(header(req, 'x-you-key') || '').trim();
   const key = userKey || String(process.env.YOU_API_KEY || '').trim();
@@ -393,10 +242,7 @@ export default async function handler(req, res) {
 
   try {
     const body = await readBody(req);
-    let data;
-    if (op === 'search') data = await opSearch(key, body);
-    else if (op === 'extract') data = await opExtract(key, body);
-    else data = await opAgent(key, body);
+    const data = op === 'search' ? await opSearch(key, body) : await opExtract(key, body);
     return send(res, 200, { ok: true, data });
   } catch (e) {
     if (e instanceof RelayError) {

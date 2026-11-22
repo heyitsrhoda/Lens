@@ -30,7 +30,7 @@ const DEFAULTS = {
 const INITIAL = {brand: null, onboarding: null, posts: [], journal: [], brainstorm: [], proposal: null, next: 1};
 const SCAN_DELAY = 2650;
 const SCAN_DELAY_REDUCED = 950;
-const SCAN_TIMEOUT = 90000; // site extract + search + one AI call (with a retry) on You.com
+const SCAN_TIMEOUT = 90000; // site extract + search on You.com, then one AI call (with a retry) on OpenRouter
 const PUBLISH_INTERVAL = 30000;
 const PUBLISH_RETRY = 5 * 60000;
 const WORKSPACE_VIEWS = ['review', 'chat', 'calendar', 'settings', 'scheduled-post'];
@@ -155,7 +155,7 @@ function errorText(error) {
 }
 function aiUnavailable(error) {
   const message = endSentence(errorText(error));
-  return `${/you\.com/i.test(message) ? message : 'You.com isn’t available right now. ' + message} Try again in a moment.`;
+  return `${/^lens ai isn.t available/i.test(message) ? message : 'Lens AI isn’t available right now. ' + message} Try again in a moment.`;
 }
 function sleep(ms) {return new Promise(resolve => setTimeout(resolve, ms));}
 function attempt(fn) {return Promise.resolve().then(fn);}
@@ -277,6 +277,10 @@ function scanPage() {
 function chatTurn(role, content) {
   return `<div class="turn ${role === 'user' ? 'user' : 'agent'}">${role === 'user' ? '' : MINI_LOGO}<div class="bubble">${esc(content)}</div></div>`;
 }
+function failedTurn(text, retryAction) {
+  const button = retryAction ? `<button class="btn failed-retry" type="button" data-action="${retryAction}">Try again</button>` : '';
+  return `<div class="turn agent failed">${MINI_LOGO}<div class="bubble failed-bubble" role="alert"><strong>Message failed.</strong> ${esc(retryAction ? String(text).replace(/\s*Try again in a moment\.$/, '') : text)}${button ? `<div class="failed-actions">${button}</div>` : ''}</div></div>`;
+}
 function typingTurn() {
   return `<div class="turn agent typing">${MINI_LOGO}<div class="bubble typing-bubble" role="status" aria-label="Lens is typing"><span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div>`;
 }
@@ -305,12 +309,14 @@ function connectionRows() {
 function onboardPage() {
   const setup = state.onboarding;
   const complete = Boolean(setup.complete);
-  const lastFailed = Boolean(setup.messages[setup.messages.length - 1]?.error);
-  const messages = setup.messages.map(m => chatTurn(m.role, m.text)).join('');
+  const lastIndex = setup.messages.length - 1;
+  const messages = setup.messages.map((m, i) => m.error
+    ? failedTurn(m.text, i === lastIndex && !onboardBusy ? 'retry-onboard' : '')
+    : chatTurn(m.role, m.text)).join('');
   const thread = messages + (onboardBusy ? typingTurn() : '') + (complete ? connectionRows() : '');
   const footer = complete
     ? '<div class="onboard-actions"><button class="btn primary" data-action="finish-onboard">Save brand &amp; open posts →</button></div>'
-    : chatComposer('onboard-form', 'Reply to Lens', onboardBusy, 'onboard') + (lastFailed && !onboardBusy ? '<div class="onboard-actions"><button class="btn ghost" type="button" data-action="retry-onboard">Try again</button></div>' : '');
+    : chatComposer('onboard-form', 'Reply to Lens', onboardBusy, 'onboard');
   return chatWorkspace('Onboarding', 'Onboarding conversation', thread, footer);
 }
 
@@ -487,7 +493,7 @@ function scheduledPostPage() {
 function brainstormPage() {
   const messages = state.brainstorm.length ? state.brainstorm : [{role: 'agent', text: `What would you like to post about for ${state.brand.name}?`}];
   const draftAction = state.proposal && !chatBusy ? '<div class="draft-action"><button class="btn primary" data-action="queue-proposal">Add draft to stack</button></div>' : '';
-  const thread = messages.map(m => chatTurn(m.role, m.text)).join('') + (chatBusy ? typingTurn() : '') + draftAction;
+  const thread = messages.map(m => m.error ? failedTurn(m.text) : chatTurn(m.role, m.text)).join('') + (chatBusy ? typingTurn() : '') + draftAction;
   return chatWorkspace('Chat', 'Brainstorm conversation', thread, chatComposer('brainstorm-form', 'Message Lens', chatBusy, 'chat'));
 }
 function settingsPage() {
@@ -612,7 +618,7 @@ async function onboardAnswer(value, {retry = false} = {}) {
   const setup = state.onboarding;
   if (!setup || setup.complete || onboardBusy) return;
   if (retry) {
-    // Drop the failure message and ask You.com again about the founder's last reply.
+    // Drop the failure message and ask Lens AI again about the founder's last reply.
     while (setup.messages.length && setup.messages[setup.messages.length - 1].error) setup.messages.pop();
     if (setup.messages[setup.messages.length - 1]?.role !== 'user') return;
   } else {

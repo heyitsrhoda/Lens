@@ -13,13 +13,16 @@
 //   createVisual({ provider, prompt })       → { src, link?, provider, designId? }  (designId: Canva, when only a link could be kept)
 //   publish(post)                            → { id, url?, imageSkipped? }
 //
-// Errors are Error objects with a readable .message; .code may be 'no-relay' | 'no-key' | 'credits' |
-// 'not-connected' | 'redirect' (connect() navigating away to sign in).
+// Errors are Error objects with a readable .message; .code may be 'no-relay' | 'no-key' | 'credits' | 'rate' |
+// 'not-connected' | 'redirect' (connect() navigating away to sign in). 'no-relay' / 'no-key' / 'credits' come from
+// either You.com search (./you.js) or OpenRouter AI (./ai.js); the message says which.
 //
-// AI and search go through You.com (./you.js → ./api/you). Canva + Sculptex are MCP servers (./mcp.js, OAuth in
+// Search and page extraction go through You.com (./you.js → ./api/you); every AI (LLM) call goes through OpenRouter
+// (./ai.js → ./api/ai). Canva + Sculptex are MCP servers (./mcp.js, OAuth in
 // sessionStorage). LinkedIn lives behind ./api/linkedin/* (./linkedin.js, HttpOnly session cookie).
 
 import * as you from './you.js';
+import * as ai from './ai.js';
 import * as mcp from './mcp.js';
 import * as linkedin from './linkedin.js';
 
@@ -373,6 +376,7 @@ async function doInit() {
     if (c.status === 'connected' && !c.account) fillAccount(key);
   }
   you.status();
+  ai.status();
   emit();
   return out;
 }
@@ -426,7 +430,7 @@ export async function disconnectAll() {
 /** Read a company website → { name, summary, product, audience?, keywords: [] }. */
 export async function scanSite(url) {
   const target = normalizeSiteUrl(url);
-  if (!target) throw err('', 'Enter a company website, like you.com.');
+  if (!target) throw err('', 'Enter a company website, like sculptex.app.');
   const host = hostOf(target);
 
   let page = null;
@@ -452,7 +456,9 @@ export async function scanSite(url) {
   material = material.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 14000);
   if (!material) throw err('', `Lens could not read ${host}.`);
 
-  const out = await you.json({
+  let out;
+  try {
+    out = await ai.json({
     system: 'You read a company website and describe the company for its founder. Use only what the page says; never invent facts. Plain text, no markdown.',
     prompt: `Website: ${target}\nPage title: ${(page && page.title) || ''}\n\nPage content (markdown):\n${material}\n\nDescribe the company:
 - name: the company or product name as written on the site
@@ -464,6 +470,12 @@ export async function scanSite(url) {
     maxTokens: 900,
     temperature: 0.2,
   });
+  } catch (e) {
+    // AI unavailable: still use what was read (title + first real sentence) so the scan isn't empty.
+    const fallback = readWithoutAI(material, page, host);
+    if (fallback) return fallback;
+    throw e;
+  }
   const name = str(out.name, 80) || (page && clip(page.title, 60)) || host;
   const summary = plain(str(out.summary, 300)).replace(/\.$/, '');
   const product = plain(str(out.product, 400));
@@ -477,6 +489,24 @@ export async function scanSite(url) {
   const audience = plain(str(out.audience, 200));
   if (audience) result.audience = audience;
   return result;
+}
+
+/** Best-effort description from the page text alone (no AI): page title + first descriptive sentence. */
+function readWithoutAI(material, page, host) {
+  const rawTitle = String((page && page.title) || '').replace(/\s+/g, ' ').trim();
+  const name = clip(rawTitle.split(/\s[|·–—-]\s/)[0] || host, 60) || host;
+  const sentences = String(material || '')
+    .split('\n')
+    .map((line) => line.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[#>*_`|]/g, ' ').replace(/\s+/g, ' ').trim())
+    .filter((line) => line.split(' ').length >= 6 && line.length <= 400 && !/cookie|sign in|log in|privacy|terms|©/i.test(line))
+    .flatMap((line) => line.split(/(?<=[.!?])\s+/))
+    .filter((t) => t.split(' ').length >= 6);
+  const titleRest = rawTitle.includes(' — ') || rawTitle.includes(' - ') || rawTitle.includes(' | ') ? rawTitle.split(/\s[|·–—-]\s/).slice(1).join(' ').trim() : '';
+  const first = sentences[0] || (titleRest.split(' ').length >= 3 ? titleRest : '');
+  if (!first) return null;
+  const summary = plain(first.split(' ').slice(0, 24).join(' ')).replace(/[.!?]+$/, '');
+  if (!summary) return null;
+  return { name, summary, product: `${summary}.`, keywords: [], fromPageOnly: true };
 }
 
 // ============================================================== onboarding
@@ -582,7 +612,7 @@ ${transcript}
 
 Return the slots recorded from the founder's latest message (and any corrections) in "answers" (omit slots you are not recording), your next message in "reply", and "done".`;
 
-  const out = await you.json({
+  const out = await ai.json({
     system,
     prompt,
     shape: '{"reply": string, "answers": {"product"?: string, "audience"?: string, "goal"?: string, "cadence"?: integer, "voice"?: string}, "done": boolean}',
@@ -687,7 +717,7 @@ ${results.length ? resultsBlock(results) : '(none found)'}
 
 Write ${n} different LinkedIn post${n === 1 ? '' : 's'}.${results.length ? '' : ' No results were found, so write from the brand brief only, with "source": null, and do not mention any news.'}`;
 
-  const out = await you.json({
+  const out = await ai.json({
     system,
     prompt,
     shape: '[{"title": string, "copy": string, "source": integer|null, "topic": string, "visualIdea": string}]',
@@ -716,7 +746,7 @@ Write ${n} different LinkedIn post${n === 1 ? '' : 's'}.${results.length ? '' : 
     posts.push(post);
     if (posts.length >= n) break;
   }
-  if (!posts.length) throw err('', 'You.com did not return usable posts. Try again.');
+  if (!posts.length) throw err('', 'Lens AI did not return usable posts. Try again.');
   return posts;
 }
 
@@ -776,7 +806,7 @@ ${resultsBlock(results)}
 
 Pick up to ${n} of the strongest and write a DM for each. If none fit, return [].`;
 
-  const out = await you.json({
+  const out = await ai.json({
     system,
     prompt,
     shape: '[{"source": integer, "title": string, "recipient": string, "copy": string}]',
@@ -834,7 +864,7 @@ Requested change: ${ask}
 
 Return the revised ${isDm ? 'message' : 'post'} and "message": one short plain sentence (max 15 words) telling the founder what you changed.`;
 
-  const out = await you.json({
+  const out = await ai.json({
     system,
     prompt,
     shape: isDm ? '{"copy": string, "message": string}' : '{"title": string, "copy": string, "message": string}',
@@ -842,7 +872,7 @@ Return the revised ${isDm ? 'message' : 'post'} and "message": one short plain s
     temperature: 0.6,
   });
   const copy = isDm ? clampWords(plain(str(out.copy, 2000)), 70) : postCopy(str(out.copy, 4000));
-  if (!copy) throw err('', 'You.com did not return a revision. Try again.');
+  if (!copy) throw err('', 'Lens AI did not return a revision. Try again.');
   const result = { copy, message: clip(plain(str(out.message, 300)), 140) || (isDm ? 'Updated the message.' : 'Updated the post.') };
   if (!isDm) {
     const title = clip(plain(str(out.title, 300)), 90);
@@ -873,21 +903,21 @@ Never invent facts, numbers or quotes about the company beyond the brief and wha
 
 Respond with JSON only, shaped {"reply": string, "proposal": {"title": string, "copy": string} | null}.`;
 
-  const send = async (extra = []) => you.chat({ system, messages: [...list.slice(-20), ...extra], maxTokens: 1600, temperature: 0.7 });
+  const send = async (extra = []) => ai.chat({ system, messages: [...list.slice(-20), ...extra], maxTokens: 1600, temperature: 0.7 });
   const first = await send();
   let parsed;
   try {
-    parsed = you.extractJson(first, '{');
+    parsed = ai.extractJson(first, '{');
   } catch (e) {
     try {
-      parsed = you.extractJson(await send([
+      parsed = ai.extractJson(await send([
         { role: 'assistant', content: first.slice(0, 3000) },
         { role: 'user', content: `That was not valid JSON (${e.message}). Reply again with only the JSON object.` },
       ]), '{');
     } catch {
       // A plain-text answer is still a usable reply.
       const reply = clampWords(plain(first), 60);
-      if (!reply) throw err('', 'You.com did not return a usable answer. Try again.');
+      if (!reply) throw err('', 'Lens AI did not return a usable answer. Try again.');
       return { reply };
     }
   }

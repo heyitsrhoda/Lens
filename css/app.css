@@ -145,3 +145,9 @@ body{overflow-x:clip}
 
 /* Headings get programmatic focus for screen readers on every screen change; no visible ring for that. */
 h1[tabindex="-1"]:focus{outline:none}
+
+/* Failed AI reply: red bubble in the thread with its own retry. */
+.failed-bubble{background:#3b2629;border:1px solid #805759;color:#ffd7d2}
+.failed-bubble strong{color:#ffab9e}
+.failed-actions{margin-top:8px}
+.failed-retry{min-height:30px;padding:0 11px;border-radius:9px;background:#5a3034;border-color:#a0676a;color:#ffe3df;font-size:13px}
