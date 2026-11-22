@@ -10,8 +10,16 @@
 //   Images API:            POST https://api.linkedin.com/rest/images?action=initializeUpload
 //                          { initializeUploadRequest: { owner } } → { value: { uploadUrl, image } }; then PUT the bytes to
 //                          uploadUrl with the OAuth Bearer token. JPG, GIF, PNG.
+//   Comments API:          POST https://api.linkedin.com/rest/socialActions/{shareUrn|ugcPostUrn|commentUrn}/comments
+//                          { actor: urn:li:person:<sub>, object: <thread urn>, message: { text }, parentComment? }
+//                          → 201, comment id in `x-restli-id`, body { id, commentUrn, object, … }. The docs (li-lms-2026-11)
+//                          list w_member_social_feed ("Post, comment, and react on posts on behalf of an authenticated
+//                          member"), which comes with the Community Management API product. Lens requests it only when
+//                          LINKEDIN_FEED_SCOPE=1, because asking for a scope the app's products don't grant breaks sign-in. The URN in the path is URL-encoded (Rest.li 2.0). Activity URNs work as the
+//                          thread (the docs' comment URNs are urn:li:comment:(urn:li:activity:<id>,<commentId>)).
+//                          message.text is plain text (mentions go in message.attributes) — no "little" escaping.
 //   Versioned calls need `LinkedIn-Version: YYYYMM` and `X-Restli-Protocol-Version: 2.0.0`.
-//   Commentary uses the "little" text format: reserved characters | { } @ [ ] ( ) < > # \ * _ ~ must be backslash-escaped.
+//   Post commentary uses the "little" text format: reserved characters | { } @ [ ] ( ) < > # \ * _ ~ must be backslash-escaped.
 //
 // Session: one HttpOnly, Secure, SameSite=Lax session cookie `lens_li` (no Max-Age/Expires → gone when the browser
 // session ends) holding { t: access token, sub, name, picture, exp }, base64url JSON + "." + HMAC-SHA256 signature keyed
@@ -24,7 +32,14 @@ export const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
 export const USERINFO_URL = 'https://api.linkedin.com/v2/userinfo';
 export const POSTS_URL = 'https://api.linkedin.com/rest/posts';
 export const IMAGES_INIT_URL = 'https://api.linkedin.com/rest/images?action=initializeUpload';
+export const SOCIAL_ACTIONS_URL = 'https://api.linkedin.com/rest/socialActions';
 export const SCOPES = 'openid profile email w_member_social';
+export const FEED_SCOPE = 'w_member_social_feed'; // comments (replies) on posts; needs the Community Management API product
+
+/** Scopes to request: posting always; replying (w_member_social_feed) once LINKEDIN_FEED_SCOPE=1 says the app has it. */
+export function scopes() {
+  return /^(?:1|true|yes|on)$/i.test(String(process.env.LINKEDIN_FEED_SCOPE || '').trim()) ? `${SCOPES} ${FEED_SCOPE}` : SCOPES;
+}
 
 export const SESSION_COOKIE = 'lens_li';
 export const STATE_COOKIE = 'lens_li_state';
@@ -65,6 +80,58 @@ export function redirect(res, location, cookies = []) {
   res.setHeader('Referrer-Policy', 'no-referrer');
   if (cookies.length) res.setHeader('Set-Cookie', cookies);
   res.end();
+}
+
+export class HttpError extends Error {
+  constructor(status, message, code = '') {
+    super(message);
+    this.status = status;
+    if (code) this.code = code;
+  }
+}
+
+/** JSON object body (Vercel may pre-parse it), at most `max` bytes. Throws HttpError 400/413. */
+export async function readJsonBody(req, max = 64 * 1024) {
+  const parse = (text) => {
+    try {
+      const v = JSON.parse(text || '{}');
+      if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('not an object');
+      return v;
+    } catch {
+      throw new HttpError(400, 'Request body must be a JSON object.', 'invalid');
+    }
+  };
+  let pre;
+  try {
+    pre = req.body;
+  } catch {
+    throw new HttpError(400, 'Request body must be JSON.', 'invalid');
+  }
+  if (pre !== undefined && pre !== null) {
+    if (typeof pre === 'object' && !Buffer.isBuffer(pre)) return pre;
+    const text = Buffer.isBuffer(pre) ? pre.toString('utf8') : String(pre);
+    if (text.length > max) throw new HttpError(413, 'Request body is too large.', 'invalid');
+    return parse(text);
+  }
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > max) throw new HttpError(413, 'Request body is too large.', 'invalid');
+    chunks.push(chunk);
+  }
+  return parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+/** Same-origin check for a state-changing request (SameSite=Lax already keeps the cookie off cross-site POSTs). */
+export function sameOrigin(req) {
+  const o = header(req, 'origin');
+  if (!o) return String(header(req, 'sec-fetch-site') || 'same-origin').toLowerCase() !== 'cross-site';
+  try {
+    return new URL(o).origin === origin(req);
+  } catch {
+    return false;
+  }
 }
 
 export function notConfigured(res) {
@@ -264,7 +331,7 @@ export async function restCall(url, { token, method = 'POST', json } = {}) {
       },
       body: json !== undefined ? JSON.stringify(json) : undefined,
     });
-    const body = res.status === 201 || res.status === 204 ? null : await readBodyJson(res);
+    const body = res.status === 204 ? null : await readBodyJson(res); // an empty 201 body reads as null
     const versionProblem = res.status === 426 || (res.status === 400 && /version/i.test(liMessage(body, '')));
     if (versionProblem) {
       last = { res, body };
@@ -274,6 +341,11 @@ export async function restCall(url, { token, method = 'POST', json } = {}) {
     return { res, body };
   }
   return last;
+}
+
+/** A URN as one Rest.li 2.0 path segment: every reserved character percent-encoded, including ( ) , : */
+export function restliEncode(urn) {
+  return encodeURIComponent(String(urn || '')).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 // ------------------------------------------------------------------ "little" text format

@@ -74,7 +74,9 @@ export default async function handler(req, res) {
   } catch {
     return fail(res, back, 'token');
   }
-  if (scope && !/\bw_member_social\b/.test(scope)) return fail(res, back, 'scope');
+  // Posting needs w_member_social ('\b' keeps w_member_social_feed from counting). Replying uses w_member_social_feed.
+  const granted = scope.split(/[\s,]+/).filter(Boolean);
+  if (scope && !granted.includes('w_member_social')) return fail(res, back, 'scope');
 
   // 2) who is this?
   let me;
@@ -100,5 +102,7 @@ export default async function handler(req, res) {
     picture,
     exp: expiresIn ? Date.now() + expiresIn * 1000 : Date.now() + 60 * 24 * 3600 * 1000,
   };
+  // Whether the comment permission was granted (unknown when LinkedIn leaves `scope` out of the token response).
+  if (scope) session.feed = granted.includes('w_member_social_feed');
   return redirect(res, withFlag(back, 'connected'), [clearStateCookie(), sessionCookie(seal(cfg.clientSecret, 'session', session))]);
 }

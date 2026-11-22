@@ -19,6 +19,13 @@ const SLOTS = QUESTIONS.map(([key]) => key);
 const CLOSING = 'I have enough to save your brand. Connect LinkedIn to continue (Lens posts there). Sculptex for 3D visuals is optional.';
 const DM_REWRITE = 'The founder did not like this message. Write a clearly different version.';
 const DM_HINT = 'Copy the message, send it on LinkedIn, then mark it sent. Swipe left for a new version.';
+const REPLY_REWRITE = 'The founder did not like this reply. Write a clearly different version.';
+const REPLY_HINT_LINKEDIN = 'Approve to post this reply on LinkedIn. Swipe left for a new version.';
+const REPLY_MANUAL_CODES = ['unsupported', 'not-found', 'forbidden', 'not-linkedin', 'rejected', 'invalid'];
+const REPLY_HINT = 'Copy the reply, post it in the thread, then mark it sent. Swipe left for a new version.';
+const REPLY_MAX = 1250; // LinkedIn comment limit
+const LISTEN_STALE = 12 * 3600000;
+const EFFORTS = ['low', 'medium', 'high'];
 const POST_HINT = 'Swipe left to decline or right to approve and schedule.';
 const DEFAULTS = {
   product: 'Here’s a look at what we’re working on.',
@@ -27,7 +34,7 @@ const DEFAULTS = {
   cadence: 3,
   voice: 'Clear and conversational'
 };
-const INITIAL = {brand: null, onboarding: null, posts: [], journal: [], brainstorm: [], proposal: null, next: 1};
+const INITIAL = {brand: null, onboarding: null, posts: [], journal: [], brainstorm: [], proposal: null, listen: null, next: 1};
 const SCAN_DELAY = 2650;
 const SCAN_DELAY_REDUCED = 950;
 const SCAN_TIMEOUT = 90000; // site extract + search on You.com, then one AI call (with a retry) on OpenRouter
@@ -43,6 +50,7 @@ function loadState() {
     for (const key of ['posts', 'journal', 'brainstorm']) if (!Array.isArray(next[key])) next[key] = [];
     if (next.onboarding && (typeof next.onboarding !== 'object' || !Array.isArray(next.onboarding.messages))) next.onboarding = null;
     if (next.onboarding && (!next.onboarding.answers || typeof next.onboarding.answers !== 'object')) next.onboarding.answers = {};
+    next.listen = cleanListen(next.listen);
     const highest = Math.max(0, ...[...next.posts, ...next.journal].map(item => Number(item?.id) || 0));
     if (!Number.isInteger(next.next) || next.next <= highest) next.next = highest + 1;
     return next;
@@ -64,6 +72,11 @@ let scheduleDragId = null;
 let onboardBusy = false;
 let chatBusy = false;
 let generating = false;
+let generatingPhase = 'draft'; // 'listen' while You.com searches run, then 'draft'
+let replyingId = null; // LinkedIn reply being posted
+let replyError = '';
+let replyErrorFor = null; // the card replyError belongs to
+let renderRunning = false; // Sculptex auto-render queue
 let rewritingId = null;
 let scheduledBusy = false;
 let visualBusy = null;
@@ -168,11 +181,68 @@ function isConnected(provider) {return Boolean(getConnections()[provider]?.conne
 function chatHistory(messages, limit = 40) {
   return messages.filter(message => !message.error).slice(-limit).map(({role, text}) => ({role, text}));
 }
-function notify(message) {
+// link: optional {href, label}; built with DOM nodes, never innerHTML.
+function notify(message, link) {
   clearTimeout(timer);
   notice.textContent = message;
+  const href = link ? safeUrl(link.href) : '';
+  if (href) {
+    const anchor = Object.assign(document.createElement('a'), {href, target: '_blank', rel: 'noopener noreferrer', textContent: str(link.label, 60) || 'Open ↗'});
+    notice.append(' ', anchor);
+  }
   notice.hidden = false;
-  timer = setTimeout(() => {notice.hidden = true;}, 4700);
+  timer = setTimeout(() => {notice.hidden = true;}, href ? 9000 : 4700);
+}
+function clampEffort(value) {
+  const effort = String(value || '').toLowerCase();
+  return EFFORTS.includes(effort) ? effort : 'low';
+}
+// Services hand back platform ids ('hackernews', 'x', 'web' …); cards show the display name.
+const PLATFORM_LABELS = {linkedin: 'LinkedIn', reddit: 'Reddit', hackernews: 'Hacker News', x: 'X', twitter: 'X', indiehackers: 'Indie Hackers', producthunt: 'Product Hunt'};
+function platformName(value, url = '') {
+  const name = str(value, 40);
+  const id = name.toLowerCase().replace(/[\s_-]+/g, '');
+  if (PLATFORM_LABELS[id]) return PLATFORM_LABELS[id];
+  if (name && id !== 'web') return name;
+  const host = url ? hostOf(url) : '';
+  const known = {'reddit.com': 'Reddit', 'news.ycombinator.com': 'Hacker News', 'x.com': 'X', 'twitter.com': 'X', 'linkedin.com': 'LinkedIn', 'indiehackers.com': 'Indie Hackers', 'producthunt.com': 'Product Hunt'};
+  const match = Object.keys(known).find(key => host === key || host.endsWith('.' + key));
+  return match ? known[match] : host;
+}
+function cleanUrn(value) {
+  const urn = str(value, 200);
+  return /^urn:li:[a-zA-Z]+:[A-Za-z0-9_:(),-]+$/.test(urn) ? urn : '';
+}
+function cleanPainPoints(list) {
+  return (Array.isArray(list) ? list : []).map(point => {
+    if (!point || typeof point !== 'object') return null;
+    const label = str(point.label, 140);
+    if (!label) return null;
+    const quotes = (Array.isArray(point.quotes) ? point.quotes : []).map(quote => {
+      const text = str(quote?.text, 400);
+      const url = safeUrl(quote?.url);
+      return text || url ? {text, url, source: str(quote?.source, 80) || (url ? hostOf(url) : '')} : null;
+    }).filter(Boolean).slice(0, 3);
+    const count = Number(point.count);
+    return {label, detail: str(point.detail, 400), count: Number.isFinite(count) && count > 0 ? Math.round(count) : 0, quotes};
+  }).filter(Boolean).slice(0, 12);
+}
+function cleanListen(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const threads = (Array.isArray(value.threads) ? value.threads : []).map(thread => {
+    const url = safeUrl(thread?.url);
+    if (!url) return null;
+    const out = {id: str(thread.id, 200) || url, url, title: str(thread.title, 300), snippet: str(thread.snippet, 800), platform: platformName(thread.platform, url), community: str(thread.community, 120)};
+    const author = str(thread.author, 120);
+    if (author) out.author = author;
+    const publishedAt = str(String(thread.publishedAt ?? ''), 40);
+    if (publishedAt) out.publishedAt = publishedAt;
+    const urn = cleanUrn(thread.linkedinUrn);
+    if (urn) out.linkedinUrn = urn;
+    return out;
+  }).filter(Boolean).slice(0, 40);
+  const at = Number(value.at);
+  return {at: Number.isFinite(at) && at > 0 ? at : 0, painPoints: cleanPainPoints(value.painPoints), threads};
 }
 function bannerDismissed() {
   try {return localStorage.getItem(BANNER_KEY) === 'dismissed';}
@@ -326,8 +396,9 @@ function onboardPage() {
 
 function visualBlock(post) {
   const pending = visualBusy && visualBusy.id === post.id ? VISUAL_PROVIDERS.find(([name]) => name === visualBusy.provider) : null;
-  if (pending) return `<div class="post-visual" role="status"><strong>${esc(pending[2])}</strong><div class="visual-orb" aria-hidden="true"></div></div>`;
+  if (pending) return `<div class="post-visual rendering" role="status"><strong>${esc(pending[2])}</strong><div class="visual-orb" aria-hidden="true"></div></div>`;
   const src = safeImage(post.visual?.src);
+  if (!src && autoRenderable(post) && state.posts.includes(post)) return '<div class="post-visual queued" role="status"><strong>Sculptex render queued</strong><div class="visual-orb" aria-hidden="true"></div></div>';
   if (!src) return '';
   const link = safeUrl(post.visual.link);
   const provider = PROVIDERS.includes(post.visual.provider) ? post.visual.provider : '';
@@ -349,31 +420,61 @@ function sourceLink(post) {
 }
 function editForm(post) {
   const dm = post.kind === 'dm';
-  return `<form class="settings-grid" id="edit-form" data-keep="${esc(post.id)}"><label class="form-label">${dm ? 'Title' : 'Headline'}<input class="field" name="title" maxlength="180" value="${esc(post.title)}" required></label><label class="form-label">${dm ? 'Message' : 'Post copy'}<textarea class="field" name="copy" rows="4" maxlength="3000" required>${esc(post.copy)}</textarea></label>${dm ? '' : visualEditor(post)}<div class="tools"><button class="btn primary" type="submit">Save edit</button><button class="btn ghost" data-action="cancel-edit" type="button">Cancel</button></div></form>`;
+  const reply = post.kind === 'reply';
+  const max = isLinkedInReply(post) ? REPLY_MAX : 3000;
+  return `<form class="settings-grid" id="edit-form" data-keep="${esc(post.id)}"><label class="form-label">${dm || reply ? 'Title' : 'Headline'}<input class="field" name="title" maxlength="180" value="${esc(post.title)}" required></label><label class="form-label">${dm ? 'Message' : reply ? 'Reply' : 'Post copy'}<textarea class="field" name="copy" rows="4" maxlength="${max}" required>${esc(post.copy)}</textarea></label>${dm || reply ? '' : visualEditor(post)}<div class="tools"><button class="btn primary" type="submit">Save edit</button><button class="btn ghost" data-action="cancel-edit" type="button">Cancel</button></div></form>`;
+}
+// Posted through the API only when the sign-in granted LinkedIn's comment permission (canReply is left out when unknown).
+function isLinkedInReply(post) {return post?.kind === 'reply' && Boolean(cleanUrn(post.linkedinUrn)) && getConnections().LinkedIn?.canReply !== false;}
+function threadLink(post) {
+  const url = safeUrl(post.sourceUrl);
+  return url ? `<a class="source-link thread-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open thread ↗</a>` : '';
+}
+function replyQuote(post) {
+  const quote = str(post.quote, 600);
+  if (!quote) return '';
+  const author = str(post.author, 120);
+  return `<blockquote class="reply-quote"><p>${esc(oneLine(quote, 320))}</p>${author ? `<cite>${esc(author)}</cite>` : ''}</blockquote>`;
+}
+function cardMeta(post) {
+  if (post.kind === 'dm') return `<span class="dm-head"><span class="dm-chip">DM</span><span class="dm-recipient">${esc(str(post.recipient, 140) || 'LinkedIn message')}</span></span>`;
+  if (post.kind === 'reply') {
+    const where = [platformName(post.platform, post.sourceUrl), str(post.community, 120)].filter(Boolean);
+    const unique = where.filter((part, index) => where.findIndex(other => other.toLowerCase() === part.toLowerCase()) === index);
+    return `<span class="dm-head"><span class="dm-chip reply-chip">Reply</span><span class="dm-recipient">${esc(unique.join(' · ') || 'Public thread')}</span></span>`;
+  }
+  return `<span class="linkedin-mark" role="img" aria-label="LinkedIn draft">${icon('linkedin')}</span>`;
 }
 function postCard(post) {
   const dm = post.kind === 'dm';
-  const busy = rewritingId === post.id;
-  const noun = dm ? 'message' : 'post';
-  const meta = dm
-    ? `<span class="dm-head"><span class="dm-chip">DM</span><span class="dm-recipient">${esc(str(post.recipient, 140) || 'LinkedIn message')}</span></span>`
-    : `<span class="linkedin-mark" role="img" aria-label="LinkedIn draft">${icon('linkedin')}</span>`;
-  const copyButton = dm && !editing ? `<button class="btn ghost with-icon copy-btn" data-action="copy-dm" ${busy ? 'disabled' : ''}>${icon('copy')}Copy</button>` : '';
-  return `<article class="post-card${busy ? ' busy' : ''}" id="post-card" aria-label="Draft ${noun}" ${busy ? 'aria-busy="true"' : ''}>
-  <header class="post-meta">${meta}<div class="card-actions">${copyButton}<button class="icon ghost round" data-action="edit" aria-label="Edit ${noun}" title="Edit ${noun}" ${busy || revisionBusy ? 'disabled' : ''}>${icon('edit')}</button></div></header>
-  <div class="post-body">${editing ? editForm(post) :
-  `<h2>${esc(post.title)}</h2><div class="post-copy">${esc(post.copy)}</div>${busy ? '<p class="card-status" role="status">Writing a new version…</p>' : ''}${dm ? '' : visualBlock(post)}${sourceLink(post)}`}</div>
+  const reply = post.kind === 'reply';
+  const linkedinReply = isLinkedInReply(post);
+  const rewriting = rewritingId === post.id;
+  const posting = replyingId === post.id;
+  const busy = rewriting || posting;
+  const noun = dm ? 'message' : reply ? 'reply' : 'post';
+  const copyButton = (dm || (reply && !linkedinReply)) && !editing ? `<button class="btn ghost with-icon copy-btn" data-action="copy-item" ${busy ? 'disabled' : ''}>${icon('copy')}Copy</button>` : '';
+  const status = rewriting ? 'Writing a new version…' : posting ? 'Posting reply on LinkedIn…' : '';
+  const body = reply
+    ? `<h2 class="reply-title">${esc(post.title)}</h2>${replyQuote(post)}<div class="post-copy reply-copy">${esc(post.copy)}</div>${status ? `<p class="card-status" role="status">${status}</p>` : ''}${threadLink(post)}${replyError && replyErrorFor === post.id && !busy ? `<p class="revision-error" role="alert">${esc(replyError)}${linkedinReply ? ' <button class="link-button" type="button" data-action="reply-manually">Reply in the thread instead</button>' : ''}</p>` : ''}`
+    : `<h2>${esc(post.title)}</h2><div class="post-copy">${esc(post.copy)}</div>${status ? `<p class="card-status" role="status">${status}</p>` : ''}${dm ? '' : visualBlock(post)}${sourceLink(post)}`;
+  return `<article class="post-card${busy ? ' busy' : ''}${reply ? ' reply-card' : ''}" id="post-card" aria-label="Draft ${noun}" ${busy ? 'aria-busy="true"' : ''}>
+  <header class="post-meta">${cardMeta(post)}<div class="card-actions">${copyButton}<button class="icon ghost round" data-action="edit" aria-label="Edit ${noun}" title="Edit ${noun}" ${busy || revisionBusy ? 'disabled' : ''}>${icon('edit')}</button></div></header>
+  <div class="post-body">${editing ? editForm(post) : body}</div>
   ${editing ? '' : `<div class="post-revision">${revising ? revisionComposer('revise-form', post.id, revisionBusy || busy) : `<button class="icon ghost round" data-action="revise" title="Suggest a revision" aria-label="Suggest a revision" ${busy ? 'disabled' : ''}>${icon('chat')}</button>`}</div>`}
   <div class="swipe-overlay" aria-hidden="true"><span id="swipe-mark"></span></div></article>`;
 }
+function labeledDecisions(declineTitle, approveLabel, approveTitle, hint, disabled) {
+  return `<div class="decisions labeled">
+      <div class="decision-wrap"><button id="decline" class="icon decision decline" data-action="decline" aria-label="I don’t like this" title="${declineTitle}" ${disabled}>${icon('decline')}</button><label class="decision-label" for="decline">I don’t like this</label></div>
+      <div class="decision-wrap"><button id="approve" class="icon decision approve" data-action="approve" aria-label="${approveLabel}" title="${approveTitle}" ${disabled}>${icon('approve')}</button><label class="decision-label" for="approve">${approveLabel}</label></div>
+    </div><p class="review-hint">${hint}</p>`;
+}
 function decisionButtons(post) {
-  const disabled = rewritingId !== null || revisionBusy ? 'disabled' : '';
-  if (post.kind === 'dm') {
-    return `<div class="decisions labeled">
-      <div class="decision-wrap"><button id="decline" class="icon decision decline" data-action="decline" aria-label="I don’t like this" title="Write a new version" ${disabled}>${icon('decline')}</button><label class="decision-label" for="decline">I don’t like this</label></div>
-      <div class="decision-wrap"><button id="approve" class="icon decision approve" data-action="approve" aria-label="I sent this" title="Mark as sent" ${disabled}>${icon('approve')}</button><label class="decision-label" for="approve">I sent this</label></div>
-    </div><p class="review-hint">${DM_HINT}</p>`;
-  }
+  const disabled = rewritingId !== null || replyingId !== null || revisionBusy ? 'disabled' : '';
+  if (post.kind === 'dm') return labeledDecisions('Write a new version', 'I sent this', 'Mark as sent', DM_HINT, disabled);
+  if (isLinkedInReply(post)) return labeledDecisions('Write a new version', 'Post reply', 'Post this reply on LinkedIn', REPLY_HINT_LINKEDIN, disabled);
+  if (post.kind === 'reply') return labeledDecisions('Write a new version', 'I sent this', 'Mark as sent', REPLY_HINT, disabled);
   return `<div class="decisions">
       <button id="decline" class="icon decision decline" data-action="decline" aria-label="Decline post" title="Decline" ${disabled}>${icon('decline')}</button>
       <button id="approve" class="icon decision approve" data-action="approve" aria-label="Approve and schedule post" title="Approve and schedule" ${disabled}>${icon('approve')}</button>
@@ -381,9 +482,14 @@ function decisionButtons(post) {
 }
 function reviewPage() {
   const post = state.posts[0];
-  if (!post && generating) return `<section class="review"><div class="review-top"><h1 tabindex="-1">Post review</h1><span>Drafting…</span></div>
-    <div class="stack"><article class="post-card loading-card" aria-label="Drafting posts" aria-busy="true"><div class="loading-content" role="status">
-      <span class="loading-mark" aria-hidden="true">${LENS_MARK}</span><p>Drafting posts…</p><small>Lens is reading what’s new in your field.</small></div></article></div></section>`;
+  if (!post && generating) {
+    const listening = generatingPhase === 'listen';
+    const title = listening ? 'Listening to conversations…' : 'Drafting posts…';
+    const detail = listening ? `Lens is reading what people say about ${state.brand?.name || 'you'} and the problem you solve.` : 'Lens is writing from what people are saying and what’s new in your field.';
+    return `<section class="review"><div class="review-top"><h1 tabindex="-1">Post review</h1><span>${listening ? 'Listening…' : 'Drafting…'}</span></div>
+    <div class="stack"><article class="post-card loading-card" aria-label="${esc(title)}" aria-busy="true"><div class="loading-content" role="status">
+      <span class="loading-mark" aria-hidden="true">${LENS_MARK}</span><p>${esc(title)}</p><small>${esc(detail)}</small></div></article></div></section>`;
+  }
   if (!post) return `<section class="empty-review"><div class="empty-content">
     <span class="empty-check">${icon('approve')}</span><h1 tabindex="-1">You’re all caught up</h1>
     <button class="btn primary" data-action="generate">Generate more</button></div></section>`;
@@ -500,10 +606,28 @@ function brainstormPage() {
   const thread = messages.map(m => m.error ? failedTurn(m.text) : chatTurn(m.role, m.text)).join('') + (chatBusy ? typingTurn() : '') + draftAction;
   return chatWorkspace('Chat', 'Brainstorm conversation', thread, chatComposer('brainstorm-form', 'Message Lens', chatBusy, 'chat'));
 }
+const listenedAt = new Intl.DateTimeFormat('en-US', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
+function painPointsBlock() {
+  const listen = state.listen;
+  const points = listen?.painPoints?.slice(0, 5) || [];
+  const when = listen?.at ? `<small>Checked ${esc(listenedAt.format(new Date(listen.at)))}</small>` : '';
+  if (!points.length) {
+    const text = generating && generatingPhase === 'listen' ? 'Listening to conversations…' : listen?.at ? 'No pain points found in public threads yet.' : 'Lens listens to public threads when it fills your stack.';
+    return `<div class="pain-points"><h3>What people are saying</h3><p class="muted">${esc(text)}</p>${when}</div>`;
+  }
+  const items = points.map(point => {
+    const quote = point.quotes.find(item => item.text) || point.quotes[0];
+    const url = point.quotes.map(item => item.url).find(Boolean) || '';
+    const source = url ? `<a class="source-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(point.quotes.find(item => item.url === url)?.source || hostOf(url))} ↗</a>` : '';
+    return `<li><strong>${esc(point.label)}</strong>${point.count ? `<span class="pain-count">~${esc(point.count)} ${point.count === 1 ? 'mention' : 'mentions'}</span>` : ''}
+      ${point.detail ? `<p class="muted">${esc(point.detail)}</p>` : ''}${quote?.text ? `<q>${esc(oneLine(quote.text, 200))}</q>` : ''}${source}</li>`;
+  }).join('');
+  return `<div class="pain-points"><h3>What people are saying</h3><ul>${items}</ul>${when}</div>`;
+}
 function settingsPage() {
   return `<section class="page">${heading('Settings', '', false)}
   <div class="settings-block"><h2>Connections</h2><p class="muted">Manage your connections.</p>${connectionRows()}</div>
-  <div class="settings-block"><h2>Brand memory</h2><p class="muted">${esc(state.brand.name)} · ${esc(state.brand.cadence)} posts per week</p><div class="tools"><button class="btn" data-action="download">Download brand file</button><button class="btn" data-action="upload">Upload brand file</button><button class="btn" data-action="download-logo">Download logo</button><input id="brand-upload" aria-label="Upload brand file" type="file" accept=".json,application/json" hidden></div></div>
+  <div class="settings-block"><h2>Brand memory</h2><p class="muted">${esc(state.brand.name)} · ${esc(state.brand.cadence)} posts per week</p>${painPointsBlock()}<div class="tools"><button class="btn" data-action="download">Download brand file</button><button class="btn" data-action="upload">Upload brand file</button><button class="btn" data-action="download-logo">Download logo</button><input id="brand-upload" aria-label="Upload brand file" type="file" accept=".json,application/json" hidden></div></div>
   <div class="settings-block"><h2>Browser storage</h2><div class="tools"><button class="btn danger" data-action="request-erase">Erase local data</button></div></div>
   <dialog id="erase-dialog" class="popup" aria-labelledby="erase-title"><div class="popup-head"><h2 id="erase-title">Erase local data?</h2></div><p>This clears your saved brand, drafts, schedule and chats from this browser, disconnects Sculptex and LinkedIn, and takes you back to onboarding.</p><div class="popup-actions"><button class="btn" data-action="cancel-erase" autofocus>Cancel</button><button class="btn danger" data-action="confirm-erase">Erase local data</button></div></dialog></section>`;
 }
@@ -676,13 +800,16 @@ function finishOnboard() {
   save();
   go('review');
   notify('Brand memory saved.');
-  if (!state.posts.length) generateStack();
+  generateStack({force: true}); // first listen + refill for the new brand
 }
 
 // ---------------------------------------------------------------- stack
 
 function newPost(fields) {
   return {id: state.next++, ...fields};
+}
+function threadFor(url) {
+  return url ? state.listen?.threads.find(thread => thread.url === url) : null;
 }
 function cleanItems(list, kind) {
   return (Array.isArray(list) ? list : []).map(item => {
@@ -695,47 +822,116 @@ function cleanItems(list, kind) {
     if (kind === 'dm') {
       const recipient = str(item.recipient, 140);
       if (recipient) out.recipient = recipient;
+    } else if (kind === 'reply') {
+      if (!sourceUrl) return null; // a reply needs the thread it answers
+      const thread = threadFor(sourceUrl);
+      if (!str(item.title, 180)) out.title = thread?.title || 'Reply';
+      out.platform = platformName(item.platformLabel || item.platform || thread?.platform, sourceUrl);
+      const community = str(item.community, 120) || thread?.community || '';
+      if (community) out.community = community;
+      const quote = str(item.quote, 600) || thread?.snippet || '';
+      if (quote) out.quote = quote;
+      const author = str(item.author, 120) || thread?.author || '';
+      if (author) out.author = author;
+      const urn = cleanUrn(item.linkedinUrn) || thread?.linkedinUrn || '';
+      if (urn) out.linkedinUrn = urn;
     } else {
       const idea = str(item.visualIdea, 400);
       if (idea) out.visualIdea = idea;
+      const prompt = str(item.visual3d?.prompt, 1000);
+      if (prompt) out.visual3d = {prompt, effort: clampEffort(item.visual3d.effort)};
     }
     return out;
   }).filter(Boolean);
 }
-function interleave(posts, dms) {
-  const out = [];
-  let i = 0, j = 0;
-  while (i < posts.length || j < dms.length) {
-    for (let k = 0; k < 2 && i < posts.length; k++) out.push(posts[i++]);
-    if (j < dms.length) out.push(dms[j++]);
+// post, post, reply, post, DM, post, reply …; leftovers go at the end.
+function interleave(posts, replies, dms) {
+  const extras = [];
+  for (let i = 0; i < Math.max(replies.length, dms.length); i++) {
+    if (i < replies.length) extras.push(replies[i]);
+    if (i < dms.length) extras.push(dms[i]);
   }
-  return out;
+  const out = posts.slice(0, 2);
+  let e = 0;
+  for (const post of posts.slice(2)) {
+    if (e < extras.length) out.push(extras[e++]);
+    out.push(post);
+  }
+  return out.concat(extras.slice(e));
 }
-async function generateStack() {
+function listenStale() {
+  return !state.listen?.at || Date.now() - state.listen.at > LISTEN_STALE;
+}
+// Threads that already have a reply or DM (in the stack or the journal) aren't offered again.
+function usedThreadUrls() {
+  return [...new Set([...state.posts, ...state.journal].filter(item => item.kind === 'reply' || item.kind === 'dm').map(item => item.sourceUrl).filter(Boolean))];
+}
+function freshThreads(used = usedThreadUrls()) {
+  const skip = new Set(used);
+  return (state.listen?.threads || []).filter(thread => !skip.has(thread.url));
+}
+function setPhase(phase) {
+  generatingPhase = phase;
+  if (view === 'review' || view === 'settings') refresh();
+}
+async function generateStack({force = false} = {}) {
   if (generating || !state.brand) return;
   generating = true;
   const owner = state;
   const brand = {...state.brand};
-  if (view === 'review') refresh();
-  const [posts, dms] = await Promise.allSettled([
-    attempt(() => lens.generatePosts({brand, count: 3})),
-    attempt(() => lens.findDMs({brand, count: 2}))
+  let listenFailure = null;
+  if ((force || listenStale()) && typeof lens.listen === 'function') {
+    setPhase('listen');
+    try {
+      const raw = await lens.listen({brand, force});
+      const heard = cleanListen(raw);
+      if (state !== owner) {generating = false; return;}
+      // Remember the competitors listening found, so later listens search them by name.
+      const rivals = Array.isArray(raw?.competitors) ? raw.competitors.map(name => str(name, 60)).filter(Boolean).slice(0, 4) : [];
+      if (rivals.length && state.brand && !(Array.isArray(state.brand.competitors) && state.brand.competitors.length)) state.brand.competitors = rivals;
+      if (heard) {
+        if (!heard.at) heard.at = Date.now();
+        state.listen = heard;
+        save();
+      }
+    } catch (error) {listenFailure = error;}
+    if (state !== owner) {generating = false; return;}
+  }
+  setPhase('draft');
+  const cadence = validCadence(brand.cadence) || DEFAULTS.cadence;
+  const painPoints = state.listen?.painPoints || [];
+  const used = usedThreadUrls();
+  const threads = freshThreads(used);
+  const none = Promise.resolve([]);
+  const replyJob = threads.length && typeof lens.findReplies === 'function' ? attempt(() => lens.findReplies({brand, threads, count: 3, painPoints, exclude: used})) : none;
+  // DMs go out after replies pick their threads, so one person never gets both a public reply and a DM.
+  const dmJob = replyJob.catch(() => []).then(picked => {
+    const replied = (Array.isArray(picked) ? picked : []).map(item => safeUrl(item?.sourceUrl)).filter(Boolean);
+    return lens.findDMs({brand, threads, count: 2, painPoints, exclude: [...used, ...replied]});
+  });
+  const [posts, replies, dms] = await Promise.allSettled([
+    attempt(() => lens.generatePosts({brand, count: 2 * cadence, painPoints})),
+    replyJob,
+    dmJob
   ]);
   generating = false;
+  generatingPhase = 'draft';
   if (state !== owner) return;
   const postItems = posts.status === 'fulfilled' ? cleanItems(posts.value, 'post') : [];
-  const dmItems = dms.status === 'fulfilled' ? cleanItems(dms.value, 'dm') : [];
-  const items = interleave(postItems, dmItems);
+  const replyItems = replies.status === 'fulfilled' ? cleanItems(replies.value, 'reply').slice(0, 3) : [];
+  const dmItems = dms.status === 'fulfilled' ? cleanItems(dms.value, 'dm').slice(0, 2) : [];
+  const items = interleave(postItems, replyItems, dmItems);
   for (const item of items) state.posts.push(newPost(item));
   save();
-  if (posts.status === 'rejected' && dms.status === 'rejected') notify('Lens couldn’t draft posts. ' + endSentence(errorText(posts.reason)));
-  else if (posts.status === 'rejected') notify('Lens couldn’t draft posts. ' + endSentence(errorText(posts.reason)));
-  else if (dms.status === 'rejected') notify('Lens couldn’t find people to message. ' + endSentence(errorText(dms.reason)));
-  else if (!items.length) notify('No new drafts this time. Try Generate more again.');
+  if (posts.status === 'rejected') notify('Lens couldn’t draft posts. ' + endSentence(errorText(posts.reason)));
+  else if (!items.length) notify(listenFailure ? 'Lens couldn’t check conversations. ' + endSentence(errorText(listenFailure)) : 'No new drafts this time. Try Generate more again.');
+  else if (listenFailure) notify('Lens couldn’t check conversations this time. ' + endSentence(errorText(listenFailure)));
+  else if (replies.status === 'rejected' && dms.status === 'rejected') notify('Lens couldn’t draft replies or messages. ' + endSentence(errorText(replies.reason)));
   if (view === 'review') {
     refresh();
     if (!editing && !revising) main.querySelector('h1')?.focus({preventScroll: true});
-  }
+  } else if (view === 'settings') refresh();
+  renderQueue();
 }
 function schedule(post) {
   const cadence = validCadence(state.brand.cadence) || DEFAULTS.cadence;
@@ -755,9 +951,14 @@ function commitDecision(approve, id) {
   decisionPending = false;
   if (state.posts[0]?.id !== id) return;
   const post = state.posts.shift();
+  replyError = '';
   if (approve && post.kind === 'dm') {
     state.journal.unshift({...post, status: 'Sent', sentAt: Date.now()});
     notify('Marked as sent.');
+  } else if (approve && post.kind === 'reply') {
+    state.journal.unshift({...post, status: 'Replied', repliedAt: Date.now()});
+    if (post.postedReply) notify('Reply posted on LinkedIn.', post.replyUrl ? {href: post.replyUrl, label: 'View ↗'} : null);
+    else notify('Marked as replied.');
   } else if (approve) {
     const slot = schedule(post);
     notify('Scheduled for ' + formatSlot(slot) + '.');
@@ -773,15 +974,22 @@ function commitDecision(approve, id) {
   main.querySelector('#approve,[data-action=generate]')?.focus({preventScroll: true});
 }
 function decide(approve, card = main.querySelector('#post-card')) {
-  if (view !== 'review' || editing || decisionPending || !state.posts.length || rewritingId !== null || revisionBusy) return;
+  if (view !== 'review' || editing || decisionPending || !state.posts.length || rewritingId !== null || replyingId !== null || revisionBusy) return;
   drag = null;
   const post = state.posts[0];
-  if (post.kind === 'dm' && !approve) {
+  if ((post.kind === 'dm' || post.kind === 'reply') && !approve) {
     if (card) paintSwipe(card, 0);
-    rewriteDM();
+    rewriteItem();
     return;
   }
-  const id = post.id;
+  if (approve && isLinkedInReply(post)) {
+    if (card) paintSwipe(card, 0);
+    postReplyItem();
+    return;
+  }
+  animateOut(approve, post.id, card);
+}
+function animateOut(approve, id, card = main.querySelector('#post-card')) {
   if (!card || reducedMotion()) {
     commitDecision(approve, id);
     return;
@@ -795,17 +1003,87 @@ function decide(approve, card = main.querySelector('#post-card')) {
   card.style.setProperty('--tilt', direction * 14 + 'deg');
   setTimeout(() => commitDecision(approve, id), 280);
 }
-async function rewriteDM() {
+function replyPayload(post) {
+  return {kind: 'reply', id: post.id, platform: post.platform, title: post.title, quote: post.quote, copy: post.copy, sourceUrl: post.sourceUrl, linkedinUrn: cleanUrn(post.linkedinUrn)};
+}
+async function postReplyItem() {
   const post = state.posts[0];
-  if (!post || post.kind !== 'dm' || rewritingId !== null) return;
+  if (!isLinkedInReply(post) || replyingId !== null) return;
+  replyErrorFor = post.id;
+  if (post.copy.length > REPLY_MAX) {replyError = `LinkedIn replies can be ${REPLY_MAX} characters. Shorten this one.`; refresh(); return;}
+  if (!isConnected('LinkedIn') || typeof lens.postReply !== 'function') {
+    replyError = 'Reconnect LinkedIn in Settings to post this reply.';
+    refresh();
+    notify('Reconnect LinkedIn in Settings.');
+    return;
+  }
+  const owner = state;
+  const id = post.id;
+  replyingId = id;
+  replyError = '';
+  revising = false;
+  render();
+  let result, failure;
+  try {result = await lens.postReply(replyPayload(post));}
+  catch (error) {failure = error;}
+  replyingId = null;
+  if (state !== owner) return;
+  const current = state.posts.find(item => item.id === id);
+  if (failure) {
+    replyError = failure.code === 'not-connected' ? 'Reconnect LinkedIn in Settings to post this reply.' : 'Couldn’t post the reply. ' + endSentence(errorText(failure));
+    if (current && REPLY_MANUAL_CODES.includes(failure.code)) {
+      // LinkedIn won't take this one through the API: hand it over as a copy-and-paste reply so the stack isn't stuck.
+      delete current.linkedinUrn;
+      replyError = 'Couldn’t post the reply through LinkedIn. ' + endSentence(errorText(failure)) + ' Copy it and reply in the thread.';
+      save();
+    }
+    notify(failure.code === 'not-connected' ? 'Reconnect LinkedIn in Settings.' : 'Couldn’t post the reply on LinkedIn.');
+    if (view === 'review') {refresh(); main.querySelector('#approve')?.focus({preventScroll: true});}
+    return;
+  }
+  const url = safeUrl(result?.url) || safeUrl(current?.sourceUrl);
+  const index = current ? state.posts.indexOf(current) : -1;
+  if (current) {
+    current.postedReply = true;
+    if (url) current.replyUrl = url;
+  }
+  if (index === 0 && view === 'review' && !editing) animateOut(true, id); // commitDecision journals it and shows the notice
+  else if (index === 0) commitDecision(true, id);
+  else {
+    if (current) { // the stack moved meanwhile (another tab); record it without touching the top card
+      state.posts.splice(index, 1);
+      state.journal.unshift({...current, status: 'Replied', repliedAt: Date.now()});
+      save();
+    }
+    notify('Reply posted on LinkedIn.', url ? {href: url, label: 'View ↗'} : null);
+    refresh();
+  }
+}
+// Turn the top LinkedIn reply card into a copy-and-paste reply (Copy, Open thread ↗, I sent this).
+function replyManually() {
+  const post = state.posts[0];
+  if (!isLinkedInReply(post) || replyingId !== null || rewritingId !== null) return;
+  delete post.linkedinUrn;
+  replyError = '';
+  save();
+  refresh();
+  main.querySelector('[data-action=copy-item]')?.focus({preventScroll: true});
+}
+async function rewriteItem() {
+  const post = state.posts[0];
+  if (!post || !['dm', 'reply'].includes(post.kind) || rewritingId !== null || replyingId !== null) return;
   const owner = state;
   const id = post.id;
   rewritingId = id;
   revisionError = '';
+  replyError = '';
   render();
   let result, failure;
+  const item = post.kind === 'reply'
+    ? {kind: 'reply', title: post.title, copy: post.copy, quote: post.quote, platform: post.platform}
+    : {kind: 'dm', title: post.title, copy: post.copy};
   try {
-    result = await lens.revise({brand: state.brand, item: {kind: 'dm', title: post.title, copy: post.copy}, request: DM_REWRITE});
+    result = await lens.revise({brand: state.brand, item, request: post.kind === 'reply' ? REPLY_REWRITE : DM_REWRITE});
   } catch (error) {failure = error;}
   rewritingId = null;
   if (state !== owner) return;
@@ -813,6 +1091,7 @@ async function rewriteDM() {
   const copy = str(result?.copy, 3000);
   if (failure) notify('Lens couldn’t write a new version. ' + endSentence(errorText(failure)));
   else if (!copy) notify('Lens didn’t return a new version. Try again.');
+  else if (current && isLinkedInReply(current) && copy.length > REPLY_MAX) notify('Lens’s new version was too long for a LinkedIn reply. Try again.');
   else if (current) {
     current.copy = copy;
     const title = str(result.title, 180);
@@ -845,10 +1124,11 @@ async function copyText(text) {
 }
 async function copyMessage(button) {
   const post = state.posts[0];
-  if (!post || post.kind !== 'dm') return;
+  if (!post || !['dm', 'reply'].includes(post.kind)) return;
   const ok = await copyText(post.copy);
   button?.focus({preventScroll: true});
-  notify(ok ? 'Message copied.' : 'Couldn’t copy. Select the message and copy it.');
+  const noun = post.kind === 'reply' ? 'reply' : 'message';
+  notify(ok ? (post.kind === 'reply' ? 'Reply copied.' : 'Message copied.') : `Couldn’t copy. Select the ${noun} and copy it.`);
 }
 function queueProposal() {
   if (!state.proposal) return;
@@ -868,7 +1148,7 @@ async function applyRevision(form) {
   const scheduled = form.id === 'scheduled-revise';
   const post = scheduled ? getScheduledPost(selectedPostId) : state.posts[0];
   if (!request || !post || post.id !== id || decisionPending) return;
-  if (scheduled ? scheduledBusy : (revisionBusy || rewritingId !== null)) return;
+  if (scheduled ? scheduledBusy : (revisionBusy || rewritingId !== null || replyingId !== null)) return;
   const owner = state;
   const editor = scheduled ? main.querySelector('#scheduled-edit') : null;
   const originalCopy = editor?.querySelector('[name=copy]')?.value.trim() || post.copy;
@@ -886,7 +1166,10 @@ async function applyRevision(form) {
   if (scheduled) main.querySelector('#scheduled-revise input[name=message]')?.focus();
   let result, failure;
   try {
-    result = await lens.revise({brand: state.brand, item: {kind: post.kind === 'dm' ? 'dm' : 'post', title: originalTitle, copy: originalCopy}, request});
+    const kind = ['dm', 'reply'].includes(post.kind) ? post.kind : 'post';
+    const item = {kind, title: originalTitle, copy: originalCopy};
+    if (kind === 'reply') Object.assign(item, {quote: post.quote, platform: post.platform});
+    result = await lens.revise({brand: state.brand, item, request});
   } catch (error) {failure = error;}
   if (scheduled) scheduledBusy = false;
   else revisionBusy = false;
@@ -899,7 +1182,7 @@ async function applyRevision(form) {
   let feedback;
   if (failure) feedback = errorText(failure);
   else if (!copy) feedback = 'Lens didn’t return a new draft. Try describing the change differently.';
-  else if (copy.length > 3000 || (post.kind !== 'dm' && postLength(title || originalTitle, copy) > LINKEDIN_MAX)) feedback = 'This edit would make the draft too long.';
+  else if (copy.length > 3000 || (isLinkedInReply(post) && copy.length > REPLY_MAX) || (!['dm', 'reply'].includes(post.kind) && postLength(title || originalTitle, copy) > LINKEDIN_MAX)) feedback = 'This edit would make the draft too long.';
   else if (copy === originalCopy && (!title || title === originalTitle)) feedback = 'That change is already in the draft.';
   else {
     valid = true;
@@ -971,7 +1254,7 @@ function visualPrompt(title, copy, post) {
   const brand = state.brand || {};
   return [
     `A LinkedIn post visual for ${brand.name || 'a startup'}.`,
-    post.visualIdea ? `Idea: ${post.visualIdea}.` : '',
+    post.visual3d?.prompt ? `Scene: ${oneLine(post.visual3d.prompt, 500)}` : post.visualIdea ? `Idea: ${post.visualIdea}.` : '',
     `Headline: ${title}.`,
     `Post: ${oneLine(copy, 500)}`,
     brand.voice ? `Tone: ${oneLine(brand.voice, 120)}.` : '',
@@ -988,13 +1271,12 @@ async function createVisualFor(id, provider, form) {
   visualBusy = {id, provider};
   refresh();
   try {
-    const result = await lens.createVisual({provider, prompt: visualPrompt(title, copy, post)});
+    const result = await lens.createVisual({provider, prompt: visualPrompt(title, copy, post), effort: clampEffort(post.visual3d?.effort)});
     const src = safeImage(result?.src);
     if (!src) throw new Error(`${provider} didn’t return an image.`);
     const current = state === owner ? findEditablePost(id) : null;
     if (current) {
-      const link = safeUrl(result.link);
-      current.visual = {src, provider: PROVIDERS.includes(result.provider) ? result.provider : provider, ...(link ? {link} : {})};
+      setVisual(current, result, src, provider);
       save();
       notify(`${provider} visual added.`);
     }
@@ -1004,14 +1286,60 @@ async function createVisualFor(id, provider, form) {
   visualBusy = null;
   refresh();
   main.querySelector(`[data-action=create-visual][data-provider=${provider}]`)?.focus({preventScroll: true});
+  renderQueue();
+}
+function setVisual(post, result, src, provider) {
+  const link = safeUrl(result?.link);
+  post.visual = {src, provider: PROVIDERS.includes(result?.provider) ? result.provider : provider, ...(link ? {link} : {})};
+  if (post.visual3d) post.visual3d.status = 'done';
 }
 function removeVisual(id) {
   const post = findEditablePost(id);
   if (!post) return;
   delete post.visual;
+  if (post.visual3d) post.visual3d.status = 'done'; // removed on purpose: don't render it again
   save();
   refresh();
   notify('Visual removed.');
+}
+
+// Sculptex auto-render: stack posts that came with a visual3d prompt get a render, one at a time.
+function autoRenderable(post) {
+  return Boolean(post && !['dm', 'reply'].includes(post.kind) && str(post.visual3d?.prompt) && !post.visual3d.status
+    && !safeImage(post.visual?.src) && isConnected('Sculptex'));
+}
+async function renderQueue() {
+  if (renderRunning) return;
+  renderRunning = true;
+  let failed = 0;
+  try {
+    while (isConnected('Sculptex') && !visualBusy) { // a manual render in progress calls renderQueue() when it ends
+      const owner = state;
+      // Approved posts waiting on the calendar still get their render before they publish.
+      const post = state.posts.find(autoRenderable) || scheduledPosts().find(autoRenderable);
+      if (!post) break;
+      const id = post.id;
+      visualBusy = {id, provider: 'Sculptex', auto: true};
+      refresh();
+      let result, failure;
+      try {result = await lens.createVisual({provider: 'Sculptex', prompt: str(post.visual3d.prompt, 1000), effort: clampEffort(post.visual3d.effort)});}
+      catch (error) {failure = error;}
+      visualBusy = null;
+      if (state !== owner) break;
+      if (failure?.code === 'not-connected') {refresh(); break;}
+      const src = failure ? '' : safeImage(result?.src);
+      const current = findEditablePost(id);
+      if (current && src && !safeImage(current.visual?.src)) setVisual(current, result, src, 'Sculptex');
+      else if (current?.visual3d) current.visual3d.status = src ? 'done' : 'failed';
+      if (!src) failed++;
+      // Defensive: never retry the same post in this loop, even if another tab's copy came back without the status.
+      const again = state.posts.find(item => item.id === id);
+      if (again?.visual3d && !again.visual3d.status) again.visual3d.status = src ? 'done' : 'failed';
+      save();
+      refresh();
+    }
+  } finally {renderRunning = false;}
+  if (failed) notify(failed === 1 ? 'Sculptex couldn’t render a visual for one post.' : `Sculptex couldn’t render visuals for ${failed} posts.`);
 }
 
 // ---------------------------------------------------------------- calendar & publishing
@@ -1166,7 +1494,7 @@ async function toggleConnection(provider) {
 }
 function downloadBrand() {
   const live = getConnections();
-  const brandFile = {...state.brand, connections: Object.fromEntries(PROVIDERS.map(provider => [provider, Boolean(live[provider]?.connected)]))};
+  const brandFile = {...state.brand, painPoints: state.listen?.painPoints || [], connections: Object.fromEntries(PROVIDERS.map(provider => [provider, Boolean(live[provider]?.connected)]))};
   downloadFile('lens-brand.json', JSON.stringify(brandFile, null, 2) + '\n', 'application/json');
 }
 function downloadLogo() {
@@ -1200,7 +1528,9 @@ function resetLocal(next) {
   scheduleDragId = null;
   decisionPending = false;
   onboardBusy = chatBusy = generating = revisionBusy = scheduledBusy = false;
-  rewritingId = null;
+  rewritingId = replyingId = null;
+  replyError = '';
+  generatingPhase = 'draft';
   visualBusy = null;
   lastDueSignature = '';
   publishing.clear();
@@ -1245,7 +1575,14 @@ async function importBrand(file) {
       const keywords = data.keywords.map(word => str(word, 60)).filter(Boolean).slice(0, 12);
       if (keywords.length) brand.keywords = keywords;
     }
+    if (Array.isArray(data.competitors)) {
+      const competitors = data.competitors.map(name => str(name, 60)).filter(Boolean).slice(0, 4);
+      if (competitors.length) brand.competitors = competitors;
+    }
     state.brand = brand;
+    const painPoints = cleanPainPoints(data.painPoints);
+    // Imported pain points show in Settings; the next refill listens again (at: 0 is stale).
+    if (painPoints.length) state.listen = {at: 0, painPoints, threads: state.listen?.threads || []};
     save();
     render();
     notify('Brand file imported.');
@@ -1264,10 +1601,15 @@ document.addEventListener('submit', event => {
   if (form.id === 'scheduled-edit') saveScheduled(form);
   if (['revise-form', 'scheduled-revise'].includes(form.id)) applyRevision(form);
   if (form.id === 'edit-form' && state.posts[0] && field(form, 'title') && field(form, 'copy')) {
-    if (state.posts[0].kind !== 'dm' && postLength(field(form, 'title'), field(form, 'copy')) > LINKEDIN_MAX) {
+    if (!['dm', 'reply'].includes(state.posts[0].kind) && postLength(field(form, 'title'), field(form, 'copy')) > LINKEDIN_MAX) {
       notify(tooLongMessage(field(form, 'title'), field(form, 'copy')));
       return;
     }
+    if (isLinkedInReply(state.posts[0]) && field(form, 'copy').length > REPLY_MAX) {
+      notify(`LinkedIn replies can be ${REPLY_MAX} characters. Shorten this one.`);
+      return;
+    }
+    replyError = '';
     Object.assign(state.posts[0], {title: field(form, 'title'), copy: field(form, 'copy')});
     editing = false;
     save();
@@ -1284,10 +1626,11 @@ document.addEventListener('click', event => {
   if (action === 'connection' && PROVIDERS.includes(provider)) toggleConnection(provider);
   if (action === 'finish-onboard') finishOnboard();
   if (action === 'retry-onboard') onboardAnswer('', {retry: true});
-  if (action === 'edit' && !editing && !decisionPending && rewritingId === null && !revisionBusy) {editing = true; render(false); main.querySelector('input[name="title"]')?.focus();}
+  if (action === 'edit' && !editing && !decisionPending && rewritingId === null && replyingId === null && !revisionBusy) {editing = true; render(false); main.querySelector('input[name="title"]')?.focus();}
   if (action === 'cancel-edit') {editing = false; render(false); main.querySelector('[data-action=edit]')?.focus({preventScroll: true});}
   if (action === 'approve' || action === 'decline') decide(action === 'approve');
-  if (action === 'copy-dm') copyMessage(button);
+  if (action === 'copy-item') copyMessage(button);
+  if (action === 'reply-manually') replyManually();
   if (action === 'queue-proposal') queueProposal();
   if (action === 'create-visual') createVisualFor(postId, provider, button.closest('form'));
   if (action === 'remove-visual') removeVisual(postId);
@@ -1306,7 +1649,7 @@ document.addEventListener('click', event => {
     render();
     main.querySelector('h1')?.focus({preventScroll: true});
   }
-  if (action === 'revise' && !decisionPending && rewritingId === null) {
+  if (action === 'revise' && !decisionPending && rewritingId === null && replyingId === null) {
     revising = true; revisionError = ''; render();
     main.querySelector('#revise-form input[name=message]')?.focus();
   }
@@ -1314,7 +1657,7 @@ document.addEventListener('click', event => {
   if (action === 'cancel-erase') main.querySelector('#erase-dialog')?.close();
   if (action === 'confirm-erase' && main.querySelector('#erase-dialog')?.open) eraseLocalData();
   if (action === 'upload') main.querySelector('#brand-upload')?.click();
-  if (action === 'generate' && !state.posts.length && !decisionPending) generateStack();
+  if (action === 'generate' && !state.posts.length && !decisionPending) generateStack({force: true});
   if (action === 'download') downloadBrand();
   if (action === 'download-logo') downloadLogo();
 });
@@ -1378,7 +1721,7 @@ function paintSwipe(card, delta) {
 }
 main.addEventListener('pointerdown', event => {
   const card = event.target.closest('#post-card');
-  if (!card || card.classList.contains('loading-card') || editing || decisionPending || rewritingId !== null || revisionBusy || event.button !== 0
+  if (!card || card.classList.contains('loading-card') || editing || decisionPending || rewritingId !== null || replyingId !== null || revisionBusy || event.button !== 0
     || event.target.closest('button,a,input,textarea,label,.post-revision')) return;
   drag = {card, id: event.pointerId, x: event.clientX, delta: 0};
   card.setPointerCapture(event.pointerId);
@@ -1465,7 +1808,7 @@ function boot() {
   render(false);
   main.firstElementChild?.classList.add('screen-enter');
   if (reset) confirmReset();
-  try {lens.onConnectionsChange(() => {refresh(); autoPublish();});} catch {}
+  try {lens.onConnectionsChange(() => {refresh(); autoPublish(); renderQueue();});} catch {}
   window.addEventListener('focus', () => autoPublish());
   document.addEventListener('visibilitychange', () => {if (document.visibilityState === 'visible') autoPublish();});
   // Another Lens tab saved: work from its copy so neither tab overwrites the other.
@@ -1488,6 +1831,7 @@ function boot() {
     if (result.error) notify(errorText(result.error));
     else if (PROVIDERS.includes(result.returnedFrom)) notify(`${result.returnedFrom} connected.`);
     autoPublish();
+    renderQueue();
     setInterval(autoPublish, PUBLISH_INTERVAL);
   });
 }

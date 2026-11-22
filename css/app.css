@@ -155,3 +155,28 @@ h1[tabindex="-1"]:focus{outline:none}
 .required-star{margin-left:2px;color:#ff6b5e;font-size:.85em;font-weight:700;vertical-align:super;line-height:0}
 .onboard-required{align-self:center;margin-right:10px}
 .onboard-actions{align-items:center}
+
+/* ---- v3.1: listening, comment replies, Sculptex renders ---- */
+.post-meta .reply-chip{background:var(--mint);color:#18251c}
+.reply-title{font-size:21px;letter-spacing:-.04em}
+.reply-quote{margin:0;padding:8px 12px;border-left:3px solid var(--lavender);border-radius:0 10px 10px 0;background:var(--surface);color:var(--muted);font-size:14px;display:grid;gap:4px}
+.reply-quote p{overflow-wrap:anywhere}
+.reply-quote cite{font-style:normal;font-size:12px;font-weight:700;color:#c9c9d1}
+.reply-copy{max-height:150px}
+.thread-link{justify-self:start;font-weight:700}
+.post-visual.queued{background:var(--surface);color:var(--muted)}
+.post-visual.queued .visual-orb{border-color:#3a3d44;box-shadow:9px 9px 0 #30333a}.post-visual.queued .visual-orb:after{background:#3a3d44}
+.post-visual.rendering .visual-orb{animation:visual-spin 1.6s ease-in-out infinite}
+@keyframes visual-spin{0%,100%{transform:rotate(-20deg) scaleX(.83)}50%{transform:rotate(25deg) scaleX(.7)}}
+.pain-points{display:grid;gap:8px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--bg)}
+.pain-points h3{font-size:16px;letter-spacing:-.02em}
+.pain-points ul{list-style:none;margin:0;padding:0;display:grid;gap:12px}
+.pain-points li{display:grid;gap:3px;min-width:0}
+.pain-points li strong{overflow-wrap:anywhere}
+.pain-points li p{font-size:13px;overflow-wrap:anywhere}
+.pain-points q{font-size:13px;color:#c9c9d1;font-style:italic;overflow-wrap:anywhere}
+.pain-points .source-link{font-size:13px;justify-self:start}
+.pain-count{display:inline-block;margin-left:8px;color:var(--muted);font-size:12px;font-weight:700}
+#notice a{color:#142219;text-decoration:underline;font-weight:800}#notice a:hover{text-decoration:none}
+@media(max-width:520px){.decisions.labeled{gap:16px}.reply-title{font-size:19px}}
+@media(prefers-reduced-motion:reduce){.post-visual.rendering .visual-orb{animation:none}}

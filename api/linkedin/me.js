@@ -1,4 +1,5 @@
-// GET /api/linkedin/me → { connected: true, name, picture } | { connected: false }.
+// GET /api/linkedin/me → { connected: true, name, picture, canReply? } | { connected: false }.
+// canReply: whether sign-in granted the comment permission (w_member_social_feed); left out when unknown.
 // Never returns the access token.
 
 import { clearSessionCookie, config, hasSessionCookie, readSession, sendJson } from '../_lib/linkedin.js';
@@ -19,5 +20,6 @@ export default async function handler(req, res) {
   const out = { ok: true, connected: true };
   if (s.name) out.name = s.name;
   if (s.picture) out.picture = s.picture;
+  if (typeof s.feed === 'boolean') out.canReply = s.feed;
   return sendJson(res, 200, out);
 }

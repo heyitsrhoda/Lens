@@ -5,6 +5,7 @@
 //   connect()    navigates to /api/linkedin/start?return=<path+hash> (LinkedIn sign-in, then back here)
 //   disconnect() POST /api/linkedin/logout
 //   publish()    POST /api/linkedin/post    { text, imageUrl? } → { id, url }
+//   comment()    POST /api/linkedin/comment { urn, text } → { id, commentUrn, url }  (reply on a LinkedIn post)
 //
 // The callback redirects back with ?li=connected or ?li=error&reason=<code>; lens.init() reads and strips it.
 
@@ -80,6 +81,7 @@ export async function status() {
     const next = { connected: true };
     if (typeof body.name === 'string' && body.name) next.name = body.name;
     if (typeof body.picture === 'string' && /^https:\/\//i.test(body.picture)) next.picture = body.picture;
+    if (typeof body.canReply === 'boolean') next.canReply = body.canReply;
     set(next);
   } else {
     const next = { connected: false };
@@ -153,4 +155,47 @@ export async function publish({ text, imageUrl } = {}) {
   }
   if (!res.ok || !out.id) throw codedError('', String(out.error || `LinkedIn posting failed (HTTP ${res.status}).`), { status: res.status });
   return { id: String(out.id), url: typeof out.url === 'string' ? out.url : undefined, imageSkipped: Boolean(out.imageSkipped) };
+}
+
+/**
+ * POST /api/linkedin/comment { urn, text } → { id, commentUrn, url }.
+ * Errors carry .code: 'not-connected' (no session / expired — the row shows it), 'unsupported' (LinkedIn would not take
+ * a comment on that post through the API), 'rate', 'forbidden', 'not-found', 'invalid', 'rejected', 'timeout', 'network', or ''.
+ */
+export async function comment({ urn, text } = {}) {
+  if (isFileProtocol() || available === false) throw codedError('not-connected', UNAVAILABLE);
+  let res;
+  try {
+    res = await fetch(`${BASE}/comment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ urn: String(urn || ''), text: String(text || '') }),
+      cache: 'no-store',
+      credentials: 'same-origin',
+    });
+  } catch {
+    throw codedError('network', 'Could not reach the Lens server to reply on LinkedIn. Check your connection.');
+  }
+  const out = await readJson(res);
+  if (!out || res.status === 501) {
+    if (res.status === 404 || res.status === 501) {
+      available = false;
+      throw codedError('not-connected', UNAVAILABLE);
+    }
+    throw codedError('', `LinkedIn reply failed (HTTP ${res.status}).`, { status: res.status });
+  }
+  if (res.status === 401) {
+    const msg = out.expired ? 'LinkedIn session expired — reconnect LinkedIn in Settings.' : 'Reconnect LinkedIn in Settings.';
+    set({ connected: false, ...(out.expired ? { error: String(out.error || msg) } : {}) });
+    throw codedError('not-connected', msg, { status: 401 });
+  }
+  if (!res.ok) {
+    const code = ['unsupported', 'rate', 'forbidden', 'not-found', 'invalid', 'rejected', 'timeout'].includes(out.code) ? out.code : '';
+    throw codedError(code, String(out.error || `LinkedIn reply failed (HTTP ${res.status}).`), { status: res.status });
+  }
+  return {
+    id: typeof out.id === 'string' ? out.id : '',
+    commentUrn: typeof out.commentUrn === 'string' ? out.commentUrn : '',
+    url: typeof out.url === 'string' && /^https:\/\/www\.linkedin\.com\//.test(out.url) ? out.url : undefined,
+  };
 }

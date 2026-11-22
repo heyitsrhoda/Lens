@@ -2,7 +2,7 @@
 // Sets a short-lived signed HttpOnly state cookie (CSRF) and redirects to LinkedIn's authorization page.
 
 import {
-  AUTHORIZE_URL, SCOPES, config, notConfigured, query, redirect, redirectUri, safeReturn, seal, randomState,
+  AUTHORIZE_URL, config, notConfigured, query, redirect, redirectUri, safeReturn, seal, randomState, scopes,
   sendJson, stateCookie, STATE_MAX_AGE_S,
 } from '../_lib/linkedin.js';
 
@@ -30,6 +30,6 @@ export default async function handler(req, res) {
   url.searchParams.set('client_id', cfg.clientId);
   url.searchParams.set('redirect_uri', callback);
   url.searchParams.set('state', state);
-  url.searchParams.set('scope', SCOPES);
+  url.searchParams.set('scope', scopes());
   return redirect(res, url.toString(), [stateCookie(sealed)]);
 }
