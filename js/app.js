@@ -164,8 +164,12 @@ function save() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state, (key, value) =>
       key === 'src' && typeof value === 'string' && value.startsWith('data:image/') ? stashImage(value) : value));
     saveFailed = false;
-  } catch {
+  } catch (error) {
     saveFailed = true;
+    try {
+      const sizes = Object.keys(localStorage).map(key => `${key}=${(localStorage.getItem(key) || '').length}`).join(', ');
+      console.warn('[Lens] save failed', error?.name || error, sizes);
+    } catch {}
     notify('Browser storage is full or unavailable. Changes last until you close this tab.');
   }
 }

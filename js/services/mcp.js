@@ -68,6 +68,7 @@ function loadStore() {
     }
     const conn = store[key];
     if (!conn || typeof conn !== 'object') continue;
+    if (typeof conn.connectedAt === 'string') { conn.connectedAt = Date.parse(conn.connectedAt) || now; pruned = true; }
     if (conn.auth && !conn.connectedAt) { conn.connectedAt = now; pruned = true; } // started before the 60-day rule
     if (conn.connectedAt && now - conn.connectedAt > CONNECTION_MAX_AGE_MS) {
       store[key] = { url: conn.url || DEFAULT_URLS[key], status: 'disconnected', tools: [], auth: null, sessionId: null,
@@ -645,7 +646,7 @@ export async function connect(key, { interactive = true } = {}) {
   try {
     await initialize(key);
     const tools = await fetchTools(key);
-    patchConn(key, { status: 'connected', tools, error: '', connectedAt: new Date().toISOString() });
+    patchConn(key, { status: 'connected', tools, error: '' });
     runConnectedHooks(key);
     return getConnection(key);
   } catch (e) {
