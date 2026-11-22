@@ -2,6 +2,7 @@
 // Every interpolated value goes through esc(); links and images pass safeUrl()/safeImage() first.
 // All data and integrations come from ./services/lens.js (see docs/SPEC.md for the contract).
 import * as lens from './services/lens.js';
+import * as images from './services/images.js';
 
 const STORAGE_KEY = 'lens-v3';
 const BANNER_KEY = 'lens-v3-calendar-banner';
@@ -122,9 +123,46 @@ settingsNav.innerHTML = icon('settings');
 
 // ---------------------------------------------------------------- helpers
 
+// Images go to IndexedDB (images.js); the saved state keeps "idb:<key>" so it stays far below localStorage's ~5 MB.
+const imageCache = new Map(); // key → data URL
+const imageKeys = new Map(); // data URL → key
+function stashImage(value) {
+  let key = imageKeys.get(value);
+  if (!key) {
+    key = images.imageKey(value);
+    imageKeys.set(value, key);
+  }
+  if (!imageCache.has(key)) {
+    imageCache.set(key, value);
+    images.putImage(key, value).catch(() => {});
+  }
+  return `idb:${key}`;
+}
+function hasVisual(post) {
+  const src = post?.visual?.src;
+  return Boolean(safeImage(src) || (typeof src === 'string' && src.startsWith('idb:')));
+}
+/** Put saved images back into posts and calendar items (they load as "idb:<key>" references). */
+async function hydrateImages() {
+  const waiting = [...state.posts, ...state.journal].filter(item => typeof item?.visual?.src === 'string' && item.visual.src.startsWith('idb:'));
+  if (!waiting.length) return;
+  await Promise.all(waiting.map(async item => {
+    const ref = item.visual.src;
+    const key = ref.slice(4);
+    let value = imageCache.get(key);
+    if (!value) {try {value = await images.getImage(key);} catch {value = null;}}
+    if (typeof value === 'string' && value.startsWith('data:image/')) {
+      imageCache.set(key, value);
+      imageKeys.set(value, key);
+      if (item.visual?.src === ref) item.visual.src = value;
+    }
+  }));
+  refresh();
+}
 function save() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state, (key, value) =>
+      key === 'src' && typeof value === 'string' && value.startsWith('data:image/') ? stashImage(value) : value));
     saveFailed = false;
   } catch {
     saveFailed = true;
@@ -1392,7 +1430,7 @@ function removeVisual(id) {
 // Sculptex auto-render: stack posts that came with a visual3d prompt get a render, one at a time.
 function autoRenderable(post) {
   return Boolean(post && !['dm', 'reply'].includes(post.kind) && str(post.visual3d?.prompt) && !post.visual3d.status
-    && !safeImage(post.visual?.src) && isConnected('Sculptex'));
+    && !hasVisual(post) && isConnected('Sculptex'));
 }
 async function renderQueue() {
   if (renderRunning) return;
@@ -1415,7 +1453,7 @@ async function renderQueue() {
       if (failure?.code === 'not-connected') {refresh(); break;}
       const src = failure ? '' : safeImage(result?.src);
       const current = findEditablePost(id);
-      if (current && src && !safeImage(current.visual?.src)) setVisual(current, result, src, 'Sculptex');
+      if (current && src && !hasVisual(current)) setVisual(current, result, src, 'Sculptex');
       else if (current?.visual3d) current.visual3d.status = src ? 'done' : 'failed';
       if (!src) failed++;
       // Defensive: never retry the same post in this loop, even if another tab's copy came back without the status.
@@ -1600,6 +1638,9 @@ async function eraseLocalData() {
     localStorage.removeItem(BANNER_KEY);
     localStorage.removeItem(GENERATING_KEY);
   } catch {notify('Browser storage could not be cleared.'); return;}
+  imageCache.clear();
+  imageKeys.clear();
+  images.clearImages().catch(() => {});
   forgetView();
   resetLocal(structuredClone(INITIAL));
   go('entry');
@@ -1639,6 +1680,7 @@ function adoptSaved() {
 }
 function syncFromOtherTab() {
   adoptSaved();
+  hydrateImages().catch(() => {});
   const fits = ['entry', 'scan'].includes(view) ? !(view === 'entry' && (state.onboarding || state.brand))
     : view === 'onboard' ? Boolean(state.onboarding) : Boolean(state.brand);
   if (fits) refresh();
@@ -1920,7 +1962,8 @@ function boot() {
   });
   // A refresh skipped while the erase dialog was open happens once it closes.
   main.addEventListener('close', () => refresh(), true);
-  ready.then(result => {
+  const imagesReady = hydrateImages().catch(() => {});
+  Promise.all([ready, imagesReady]).then(([result]) => {
     refresh();
     if (result.error) notify(errorText(result.error));
     else if (PROVIDERS.includes(result.returnedFrom)) notify(`${result.returnedFrom} connected.`);
