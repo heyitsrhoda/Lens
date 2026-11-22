@@ -1444,6 +1444,8 @@ async function renderQueue() {
   if (renderRunning) return;
   renderRunning = true;
   let failed = 0;
+  let reason = '';
+  let stopped = false;
   try {
     while (isConnected('Sculptex') && !visualBusy) { // a manual render in progress calls renderQueue() when it ends
       const owner = state;
@@ -1459,6 +1461,12 @@ async function renderQueue() {
       visualBusy = null;
       if (state !== owner) break;
       if (failure?.code === 'not-connected') {refresh(); break;}
+      if (failure) {
+        reason = sculptexReason(failure);
+        // Credits, sign-in, maintenance or rate limits fail every render the same way: stop here and keep the
+        // posts queued, so they render once it's fixed instead of each being marked failed.
+        if (SCULPTEX_STOP.test(reason)) {failed++; stopped = true; refresh(); break;}
+      }
       const src = failure ? '' : safeImage(result?.src);
       const current = findEditablePost(id);
       if (current && src && !hasVisual(current)) setVisual(current, result, src, 'Sculptex');
@@ -1471,7 +1479,14 @@ async function renderQueue() {
       refresh();
     }
   } finally {renderRunning = false;}
-  if (failed) notify(failed === 1 ? 'Sculptex couldn’t render a visual for one post.' : `Sculptex couldn’t render visuals for ${failed} posts.`);
+  if (!failed) return;
+  const head = stopped ? 'Sculptex renders paused.' : failed === 1 ? 'Sculptex couldn’t render a visual for one post.' : `Sculptex couldn’t render visuals for ${failed} posts.`;
+  notify(reason ? `${head} ${endSentence(reason)}` : head);
+}
+const SCULPTEX_STOP = /credit|sign-?in|reconnect|expired|maintenance|too many requests|rate limit|storage right now/i;
+/** Sculptex's own words for why a render failed, without the tool-call wrapper. */
+function sculptexReason(error) {
+  return oneLine(errorText(error).replace(/^Sculptex tool "[^"]*" failed:?\s*/i, '').replace(/\s*Nothing was charged\.?/i, ''), 220);
 }
 
 // ---------------------------------------------------------------- calendar & publishing
