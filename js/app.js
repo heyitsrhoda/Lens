@@ -575,6 +575,19 @@ function calendarPage() {
     <p class="muted calendar-note">${all.length ? 'Drag a post to another day or open it to edit.' : 'Approved posts will appear here.'}</p></section>`;
 }
 function getScheduledPost(id) {return scheduledPosts().find(post => post.id === id);}
+/** Take a scheduled post off the calendar so it never publishes (kept in the journal as 'Removed'). */
+function removeScheduledPost(id) {
+  main.querySelector('#remove-post-dialog')?.close();
+  const post = getScheduledPost(id);
+  if (!post) {go('calendar'); return;}
+  if (publishing.has(post.id)) {notify('This post is being published right now.'); return;}
+  post.status = 'Removed';
+  post.removedAt = Date.now();
+  save();
+  selectedPostId = null;
+  go('calendar');
+  notify('Post removed from your calendar.');
+}
 function getCalendarPost(id) {return calendarPosts().find(post => post.id === id);}
 function findEditablePost(id) {return state.posts.find(post => post.id === id) || getScheduledPost(id);}
 function publishStatus(post) {
@@ -611,12 +624,13 @@ function scheduledPostPage() {
       <label class="form-label">Post copy<textarea class="field" name="copy" rows="6" maxlength="3000" required>${esc(post.copy)}</textarea></label>
       <label class="form-label">Date<input class="field" type="date" name="day" value="${dateKey(post.slot)}" required></label>
       ${visualEditor(post)}
-      <div><button class="btn primary" type="submit">Save changes</button></div>
+      <div class="tools"><button class="btn primary" type="submit">Save changes</button><button class="btn danger" type="button" data-action="request-remove-post">Remove from calendar</button></div>
     </form>
     <div class="revision-panel"><h2>Revise with Lens</h2>
       ${thread ? `<div class="thread" role="log" aria-label="Revision conversation">${thread}</div>` : ''}
       ${revisionComposer('scheduled-revise', post.id, scheduledBusy)}
-    </div></section>`;
+    </div>
+    <dialog id="remove-post-dialog" class="popup" aria-labelledby="remove-post-title"><div class="popup-head"><h2 id="remove-post-title">Remove this post?</h2></div><p>It comes off your calendar and won’t be posted to LinkedIn.</p><div class="popup-actions"><button class="btn" type="button" data-action="cancel-remove-post" autofocus>Cancel</button><button class="btn danger" type="button" data-action="confirm-remove-post">Remove post</button></div></dialog></section>`;
 }
 function brainstormPage() {
   const messages = state.brainstorm.length ? state.brainstorm : [{role: 'agent', text: `What would you like to post about for ${state.brand.name}?`}];
@@ -1687,6 +1701,9 @@ document.addEventListener('click', event => {
     revising = true; revisionError = ''; render();
     main.querySelector('#revise-form input[name=message]')?.focus();
   }
+  if (action === 'request-remove-post') main.querySelector('#remove-post-dialog')?.showModal();
+  if (action === 'cancel-remove-post') main.querySelector('#remove-post-dialog')?.close();
+  if (action === 'confirm-remove-post' && main.querySelector('#remove-post-dialog')?.open) removeScheduledPost(selectedPostId);
   if (action === 'request-erase') main.querySelector('#erase-dialog')?.showModal();
   if (action === 'cancel-erase') main.querySelector('#erase-dialog')?.close();
   if (action === 'confirm-erase' && main.querySelector('#erase-dialog')?.open) eraseLocalData();
