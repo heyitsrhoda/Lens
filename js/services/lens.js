@@ -1,190 +1,68 @@
-// High-level Lens actions. Views call ONLY these for data; every function returns its data AND
-// writes it into the store. Demo mode (settings.demoMode or a missing key) uses demo-data with a
-// short simulated delay; live mode uses You.com (search + AI via the ./api/you relay; Claude optional via
-// settings.aiProvider) and falls back to demo data with a toast. Every LLM call goes through ai.js.
-// LinkedIn is MOCKED (no network). Sculptex and Canva are real MCP servers (see mcp.js; OAuth, no API keys).
+// Lens service contract (docs/SPEC.md → "Service contract — js/services/lens.js").
+//
+//   init()                                   → { returnedFrom?: 'Canva'|'Sculptex'|'LinkedIn', error? }
+//   connections()                            (sync) → { Canva:{connected, account?, error?}, Sculptex:{…}, LinkedIn:{connected, name?, picture?, error?} }
+//   onConnectionsChange(fn)                  → unsubscribe
+//   connect(provider) · disconnect(provider) · disconnectAll()
+//   scanSite(url)                            → { name, summary, product, audience?, keywords: [] }
+//   onboardTurn({ site, scan, answers, messages }) → { reply, answers, done }
+//   generatePosts({ brand, count })          → [{ kind:'post', title, copy, sourceUrl?, sourceLabel?, visualIdea? }]
+//   findDMs({ brand, count })                → [{ kind:'dm', title, copy, recipient?, sourceUrl, sourceLabel }]
+//   revise({ brand, item, request })         → { title?, copy, message }
+//   brainstorm({ brand, messages, proposal })→ { reply, proposal?: { title, copy } }
+//   createVisual({ provider, prompt })       → { src, link?, provider, designId? }  (designId: Canva, when only a link could be kept)
+//   publish(post)                            → { id, url?, imageSkipped? }
+//
+// Errors are Error objects with a readable .message; .code may be 'no-relay' | 'no-key' | 'credits' |
+// 'not-connected' | 'redirect' (connect() navigating away to sign in).
+//
+// AI and search go through You.com (./you.js → ./api/you). Canva + Sculptex are MCP servers (./mcp.js, OAuth in
+// sessionStorage). LinkedIn lives behind ./api/linkedin/* (./linkedin.js, HttpOnly session cookie).
 
-import { getState, setState, toast, uid, setLoading, liveFlags } from '../store.js';
-import { demo, replyTemplate, dmTemplate, postTemplate, altPostTemplate, postVisual } from '../demo-data.js';
-import * as you from './youcom.js';
-import * as ai from './ai.js';
+import * as you from './you.js';
 import * as mcp from './mcp.js';
+import * as linkedin from './linkedin.js';
 
-// ============================================================== shared helpers
+const PROVIDERS = ['Canva', 'Sculptex', 'LinkedIn'];
+const MCP_KEYS = { Canva: 'canva', Sculptex: 'sculptex' };
+const COMMUNITY_DOMAINS = ['reddit.com', 'news.ycombinator.com', 'indiehackers.com', 'x.com', 'linkedin.com'];
 
-const COMMUNITY_DOMAINS = ['reddit.com', 'news.ycombinator.com', 'indiehackers.com', 'x.com', 'twitter.com', 'linkedin.com', 'producthunt.com'];
-const PAIN_WORDS = ['struggl', 'frustrat', 'hate', 'annoy', 'pain', 'stuck', 'impossible', "can't", 'cannot', 'broken', 'waste', 'tedious', 'confus', 'hard to', 'difficult', 'problem', 'issue', 'fail', 'wish'];
-const SEEK_WORDS = ['looking for', 'recommend', 'alternative', 'any tool', 'anyone know', 'how do i', 'how do you', 'best way', 'is there a', 'help', 'suggestions', 'what do you use'];
-const STOP_WORDS = new Set('the a an and or but of for to in on at with from by is are was were be been it this that these those you your our we they i my me as into about over than then so not no yes can will just more most very also how what why when where who which their there here have has had do does did make made get got use used using'.split(' '));
-const BEST_SLOTS = [
-  { dow: 2, h: 9, m: 30 },
-  { dow: 3, h: 12, m: 0 },
-  { dow: 4, h: 8, m: 0 },
-  { dow: 1, h: 10, m: 0 },
-  { dow: 5, h: 11, m: 0 },
+const SLOTS = [
+  ['product', 'What does your company do?'],
+  ['audience', 'Who do you want to reach?'],
+  ['goal', 'What do you want your posts to achieve?'],
+  ['cadence', 'How often should Lens post? For example, 3 times a week.'],
+  ['voice', 'How should your posts sound? You can also mention topics to avoid.'],
 ];
+const FINAL_REPLY = 'I have enough to save your brand. Connect Canva for design, Sculptex for 3D visuals, and LinkedIn for scheduling, or continue without connecting.';
+const LINKEDIN_REASONS = {
+  cancelled: 'LinkedIn sign-in was cancelled.',
+  state: 'LinkedIn sign-in expired or was opened in another tab. Try connecting again.',
+  token: 'LinkedIn did not finish the sign-in. Try connecting again.',
+  profile: 'LinkedIn signed you in but did not share your profile. Try connecting again.',
+  scope: 'LinkedIn did not grant posting permission. Try connecting again and allow posting.',
+  config: "LinkedIn isn't configured on this deployment.",
+};
 
-const notifiedDue = new Set();
-const sendingNow = new Set();
-
-function nowIso() {
-  return new Date().toISOString();
+function err(code, message, extra = {}) {
+  const e = new Error(message);
+  if (code) e.code = code;
+  Object.assign(e, extra);
+  return e;
 }
 
-function delay(min = 400, max = 900) {
-  const ms = Math.round(min + Math.random() * Math.max(0, max - min));
-  return new Promise((r) => setTimeout(r, ms));
+// ============================================================== small text helpers
+
+function str(x, max = 2000) {
+  return typeof x === 'string' ? x.trim().slice(0, max) : '';
 }
 
-function clone(x) {
-  if (x === undefined || x === null) return x;
-  try { return structuredClone(x); } catch { return JSON.parse(JSON.stringify(x)); }
-}
-
-function demoList(name) {
-  const v = demo?.[name];
-  try {
-    const out = typeof v === 'function' ? v(new Date()) : v;
-    return Array.isArray(out) ? clone(out) : [];
-  } catch (e) {
-    console.warn(`[Lens] demo ${name} failed`, e);
-    return [];
-  }
-}
-
-function settings() {
-  return getState().settings || {};
-}
-
-// Live AI = not in demo mode and the chosen provider is usable (You.com user key or the deployment's env key;
-// or aiProvider 'claude' with a Claude key).
-// Demo mode is automatic (live whenever You.com is reachable) unless the user set the toggle explicitly.
-function isDemo() {
-  const s = settings();
-  if (s.demoModeExplicit) return Boolean(s.demoMode);
-  const youReachable = you.hasKey() && you.cachedStatus()?.relay !== false;
-  return !youReachable && !(s.aiProvider === 'claude' && String(s.claudeKey || '').trim());
-}
-
-function canUseAI() {
-  return !isDemo() && ai.available();
-}
-
-// Live web search = not in demo mode and a You.com key (the user's, or the deployment's env key).
-function canUseYou() {
-  return !isDemo() && you.hasKey();
-}
-
-// The chats (drawer, onboarding audience chat, idea chat) are ALWAYS real You.com AI — never scripted.
-// Live whenever a You.com key exists (the user's own, or the deployment's YOU_API_KEY), regardless of demo mode.
-function canChatLive() {
-  return you.hasKey();
-}
-
-/** Honest assistant message when You.com can't answer (no relay / no key / API error). */
-function chatUnavailable(err, { plain = false } = {}) {
-  const msg = chatUnavailableText(err);
-  return plain ? msg.replace(/\*\*|`/g, '') : msg;
-}
-
-function chatUnavailableText(err) {
-  if (err?.code === 'no-relay' || (!err && !you.cachedStatus()?.relay && !you.hasUserKey())) {
-    return 'I can\'t reach You.com from here. The AI chat runs through the Lens server, so open Lens on its Vercel deployment (or run `python3 dev/serve.py` locally).';
-  }
-  if (!err) {
-    return 'I\'m not connected to You.com yet. Add your You.com API key in **Settings → Connections** (or set `YOU_API_KEY` on the Vercel project) and ask me again.';
-  }
-  return `You.com didn't answer that one (${String(err.message || err).slice(0, 160)}). Try again in a moment, or check your key in **Settings → Connections**.`;
-}
-
-// Wait for the relay status check (does the deployment hold an env key?) before deciding live vs demo.
-async function warm() {
-  try {
-    await you.status();
-  } catch {
-    /* treated as no relay */
-  }
-}
-
-function aiName() {
-  return ai.providerLabel();
-}
-
-/** { live, demoMode, search, ai, provider, providerLabel, userKey, envKey, relay } — for Settings / badges. */
-export async function liveStatus() {
-  await warm();
-  const st = you.cachedStatus() || {};
-  const s = settings();
-  return {
-    live: canUseYou() || canUseAI(),
-    demoMode: isDemo(),
-    search: canUseYou(),
-    ai: canUseAI(),
-    provider: ai.provider(),
-    providerLabel: ai.providerLabel(),
-    userKey: you.hasUserKey(),
-    envKey: Boolean(st.envKey),
-    relay: Boolean(st.relay),
-  };
-}
-
-function company() {
-  const c = getState().company || {};
-  const d = demo?.company || {};
-  return {
-    ...d,
-    ...Object.fromEntries(Object.entries(c).filter(([, v]) => (Array.isArray(v) ? v.length : v))),
-    keywords: Array.isArray(c.keywords) && c.keywords.length ? c.keywords : d.keywords || [],
-    competitors: Array.isArray(c.competitors) && c.competitors.length ? c.competitors : d.competitors || [],
-  };
-}
-
-async function withLoading(key, fn) {
-  setLoading(key, true);
-  try {
-    return await fn();
-  } finally {
-    setLoading(key, false);
-  }
-}
-
-function fallbackToast(label, err) {
-  console.warn(`[Lens] ${label} failed`, err);
-  if (err?.code === 'no-relay') {
-    toast(you.NO_RELAY_MESSAGE, 'info');
-    return;
-  }
-  toast(`${label}: ${err?.message || err} — using demo data instead.`, 'error');
-}
-
-function asText(x) {
-  if (!x) return '';
-  if (typeof x === 'string') return x;
-  return x.body || x.text || '';
-}
-
-function hostOf(url) {
-  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
-}
-
-function normalizeUrl(url) {
-  const raw = String(url || '').trim();
-  if (!raw) return '';
-  const withProto = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  try {
-    const u = new URL(withProto);
-    return u.toString().replace(/\/$/, '');
-  } catch {
-    return withProto;
-  }
-}
-
-function urlKey(url) {
-  return String(url || '').replace(/[#?].*$/, '').replace(/\/$/, '').replace(/^https?:\/\/(www\.)?/, '').toLowerCase();
-}
-
-function words(text) {
-  return String(text || '').toLowerCase().match(/[a-z0-9][a-z0-9'+-]*/g) || [];
+function clip(text, n) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (t.length <= n) return t;
+  const cut = t.slice(0, n - 1);
+  const sp = cut.lastIndexOf(' ');
+  return `${(sp > n * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,;:.–—-]+$/, '')}…`;
 }
 
 function countWords(text) {
@@ -192,9 +70,10 @@ function countWords(text) {
 }
 
 function sentences(text) {
-  return String(text || '').replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+(?=[A-Z0-9"“'(])/).filter(Boolean);
+  return String(text || '').replace(/[ \t]+/g, ' ').trim().split(/(?<=[.!?])\s+(?=[A-Z0-9"“'(])/).filter(Boolean);
 }
 
+/** Keep whole sentences up to `max` words; a single over-long sentence is cut at a word boundary. */
 function clampWords(text, max) {
   const t = String(text || '').trim();
   if (countWords(t) <= max) return t;
@@ -220,872 +99,818 @@ function clampWords(text, max) {
 function limitHashtags(text, max = 3) {
   let seen = 0;
   return String(text || '')
-    .replace(/(^|\s)#[A-Za-z][\w-]*/g, (m) => (++seen <= max ? m : ''))
+    .replace(/(^|\s)#[\p{L}\p{N}_]+/gu, (m, pre) => (++seen <= max ? m : pre))
     .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
-function cleanMessage(text) {
+/** Plain text: no markdown emphasis, headings, code ticks or wrapping quotes. */
+function plain(text) {
   return String(text || '')
-    .trim()
-    .replace(/^(here(?:'s| is)[^:\n]*:\s*)/i, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/```[a-z]*\n?|```/gi, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/__(.+?)__/g, '$1')
+    .replace(/(^|\s)\*(\S[^*]*?)\*(?=\s|[.,!?]|$)/g, '$1$2')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^\s*[-*•]\s+/gm, '')
+    .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '$1')
     .replace(/^["“](.*)["”]$/s, '$1')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
-function titleCase(s) {
-  return String(s || '').replace(/\b([a-z])/g, (m) => m.toUpperCase());
+/** Post copy: plain paragraphs (bullets and emphasis removed is too aggressive for posts, so only emphasis/headings). */
+function postCopy(text) {
+  return limitHashtags(String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/__(.+?)__/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^["“]([\s\S]*)["”]$/, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim(), 3);
 }
 
-function fmtWhen(iso) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+  } catch {
+    return '';
+  }
 }
 
-function clip(text, n) {
-  const t = String(text || '').replace(/\s+/g, ' ').trim();
-  return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t;
+function httpUrl(u) {
+  const v = String(u || '').trim();
+  if (!/^https?:\/\//i.test(v)) return '';
+  try {
+    return new URL(v).toString();
+  } catch {
+    return '';
+  }
 }
 
-function normForMatch(s) {
-  return String(s || '').toLowerCase().replace(/[“”"’'`]/g, '').replace(/\s+/g, ' ').trim();
+function normalizeSiteUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  const withProto = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const u = new URL(withProto);
+    if (!/\./.test(u.hostname)) return '';
+    return u.toString();
+  } catch {
+    return '';
+  }
 }
 
-function updateDraft(id, patch) {
-  let updated = null;
-  setState((s) => ({
-    drafts: (s.drafts || []).map((d) => {
-      if (d.id !== id) return d;
-      updated = { ...d, ...patch, updatedAt: nowIso() };
-      return updated;
-    }),
-  }));
-  return updated;
+const STOP = new Set('the a an and or but of for to in on at with from by is are was were be been it this that these those you your our we they i my me as into about over than then so not no yes can will just more most very also how what why when where who which their there here have has had do does did make made get got use used using help helps helping who people teams company companies platform tool tools app apps product products build builds building easy simple better new best way ways all any every one'.split(' '));
+
+function keywordsFrom(text, n = 4) {
+  const counts = new Map();
+  for (const w of String(text || '').toLowerCase().match(/[a-z][a-z0-9+-]{2,}/g) || []) {
+    if (STOP.has(w)) continue;
+    counts.set(w, (counts.get(w) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([w]) => w);
 }
 
-function setThreadStatus(threadId, status) {
-  if (!threadId) return;
-  setState((s) => ({ threads: (s.threads || []).map((t) => (t.id === threadId ? { ...t, status } : t)) }));
+// ============================================================== brand helpers
+
+function normBrand(brand) {
+  const b = brand && typeof brand === 'object' ? brand : {};
+  const keywords = Array.isArray(b.keywords) ? b.keywords.map((k) => str(k, 60)).filter(Boolean).slice(0, 8) : [];
+  return {
+    name: str(b.name, 120) || hostOf(b.url) || 'the company',
+    url: str(b.url, 300),
+    product: str(b.product, 600),
+    audience: str(b.audience, 300),
+    goal: str(b.goal, 300),
+    voice: str(b.voice, 300),
+    cadence: Number.isInteger(b.cadence) ? b.cadence : undefined,
+    summary: str(b.summary, 400),
+    keywords,
+  };
 }
 
-function findDraft(id) {
-  const d = (getState().drafts || []).find((x) => x.id === id);
-  if (!d) throw new Error('That draft no longer exists.');
-  return d;
-}
-
-function findThread(id) {
-  return (getState().threads || []).find((t) => t.id === id) || null;
-}
-
-function addDrafts(list) {
-  setState((s) => ({ drafts: [...list, ...(s.drafts || [])] }));
-}
-
-function linkedinConnected() {
-  return getState().connections?.linkedin?.status === 'connected';
-}
-
-function patchConnection(key, patch) {
-  setState((s) => {
-    const all = s.connections || {};
-    return { connections: { ...all, [key]: { ...(all[key] || {}), ...patch } } };
-  });
-}
-
-function companyBrief(c = company()) {
+function brandBrief(b) {
   return [
-    `Product: ${c.name || 'Unnamed'}${c.url ? ` (${c.url})` : ''}`,
-    c.tagline ? `Tagline: ${c.tagline}` : '',
-    c.description ? `What it does: ${c.description}` : '',
-    c.audience ? `Target audience: ${c.audience}` : '',
-    c.field ? `Field: ${c.field}` : '',
-    c.keywords?.length ? `Keywords: ${c.keywords.join(', ')}` : '',
-    c.competitors?.length ? `Alternatives people use: ${c.competitors.join(', ')}` : '',
-    c.voice ? `Founder voice: ${c.voice}` : '',
+    `Company: ${b.name}${b.url ? ` (${b.url})` : ''}`,
+    b.product && `What it does: ${b.product}`,
+    b.summary && b.summary !== b.product && `Summary: ${b.summary}`,
+    b.audience && `Audience: ${b.audience}`,
+    b.goal && `Goal for posts: ${b.goal}`,
+    b.voice && `Voice: ${b.voice}`,
+    b.keywords.length && `Keywords: ${b.keywords.join(', ')}`,
   ].filter(Boolean).join('\n');
 }
 
-// ============================================================== threads
-
-function communityOf(url, source) {
-  const host = hostOf(url);
-  if (source === 'reddit') {
-    const m = /\/r\/([A-Za-z0-9_]+)/.exec(url || '');
-    return m ? `r/${m[1]}` : 'Reddit';
-  }
-  return {
-    hackernews: 'Hacker News',
-    x: 'X',
-    linkedin: 'LinkedIn',
-    indiehackers: 'Indie Hackers',
-    producthunt: 'Product Hunt',
-  }[source] || host || 'Web';
+function topicOf(b) {
+  if (b.keywords.length) return b.keywords.slice(0, 3).join(' ');
+  const kw = keywordsFrom(`${b.product} ${b.summary}`, 3);
+  return kw.length ? kw.join(' ') : b.name;
 }
 
-function authorOf(url, source) {
+function audienceShort(b) {
+  return clip(String(b.audience || '').split(/[,.;]| and /i)[0], 40).replace(/…$/, '');
+}
+
+// ============================================================== connections
+
+const listeners = new Set();
+let lastSnapshot = '';
+
+function mcpRow(key) {
+  const c = mcp.getConnection(key);
+  const row = { connected: c.status === 'connected' };
+  if (c.status === 'connecting') row.connecting = true;
+  if (c.account) row.account = String(c.account);
+  if (c.error && c.status !== 'connected') row.error = String(c.error);
+  return row;
+}
+
+/** Sync snapshot of every connection. */
+export function connections() {
+  const li = linkedin.current();
+  const LinkedIn = { connected: Boolean(li.connected) };
+  if (li.name) LinkedIn.name = li.name;
+  if (li.picture) LinkedIn.picture = li.picture;
+  if (li.error && !li.connected) LinkedIn.error = li.error;
+  return { Canva: mcpRow('canva'), Sculptex: mcpRow('sculptex'), LinkedIn };
+}
+
+export function onConnectionsChange(fn) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+function emit() {
+  const snap = connections();
+  const key = JSON.stringify(snap);
+  if (key === lastSnapshot) return;
+  lastSnapshot = key;
+  for (const fn of [...listeners]) {
+    try { fn(snap); } catch (e) { console.warn('[Lens] connections listener failed', e); }
+  }
+}
+
+mcp.onChange(() => emit());
+linkedin.onChange(() => emit());
+
+function providerName(p) {
+  const v = String(p || '').toLowerCase();
+  return PROVIDERS.find((x) => x.toLowerCase() === v) || '';
+}
+
+// ---- account names (best effort, never throws)
+
+function decodeJwtName(token) {
   try {
-    const u = new URL(url);
-    const parts = u.pathname.split('/').filter(Boolean);
-    if (source === 'x' && parts[0] && parts[1] === 'status') return `@${parts[0]}`;
-    if (source === 'reddit') {
-      const i = parts.indexOf('user');
-      if (i >= 0 && parts[i + 1]) return `u/${parts[i + 1]}`;
-    }
-    if (source === 'linkedin' && parts[0] === 'posts' && parts[1]) return parts[1].split('_')[0];
-    if (source === 'linkedin' && parts[0] === 'in' && parts[1]) return parts[1];
-    if (source === 'indiehackers' && parts[0] && parts[0] !== 'post') return parts[0];
-  } catch { /* ignore */ }
-  return '';
-}
-
-function heuristicScore(result, c) {
-  const text = `${result.title} ${result.snippet}`.toLowerCase();
-  const kw = (c.keywords || []).map((k) => String(k).toLowerCase()).filter(Boolean);
-  const kwHits = kw.filter((k) => text.includes(k)).length;
-  const fieldHits = words(c.field).filter((w) => w.length > 3 && !STOP_WORDS.has(w) && text.includes(w)).length;
-  const painHits = PAIN_WORDS.filter((w) => text.includes(w)).length;
-  const seekHits = SEEK_WORDS.filter((w) => text.includes(w)).length;
-  const ageDays = result.publishedAt ? (Date.now() - Date.parse(result.publishedAt)) / 86400000 : 30;
-  const recency = ageDays < 3 ? 10 : ageDays < 10 ? 6 : ageDays < 30 ? 3 : 0;
-  const community = result.source !== 'web' ? 8 : 0;
-  const relevance = Math.max(5, Math.min(96, 22 + kwHits * 12 + fieldHits * 4 + painHits * 7 + seekHits * 8 + recency + community));
-  const intent = seekHits >= 1 && painHits >= 1 ? 'high' : seekHits || painHits ? 'medium' : 'low';
-  const matched = kw.find((k) => text.includes(k));
-  const painPoint = matched ? titleCase(matched) : (c.keywords?.[0] ? titleCase(c.keywords[0]) : 'General');
-  return { relevance, intent, painPoint };
-}
-
-function bestQuote(snippet) {
-  const parts = sentences(snippet);
-  if (!parts.length) return clip(snippet, 200);
-  let best = parts[0];
-  let bestScore = -1;
-  for (const s of parts) {
-    const l = s.toLowerCase();
-    const score = PAIN_WORDS.filter((w) => l.includes(w)).length * 2 + SEEK_WORDS.filter((w) => l.includes(w)).length + (s.length > 40 ? 1 : 0);
-    if (score > bestScore) {
-      best = s;
-      bestScore = score;
-    }
-  }
-  return clip(best, 220);
-}
-
-function mergeThreads(existing, incoming) {
-  // Match by id, else by URL + title (demo threads can share a search-page URL), keeping statuses.
-  const out = (existing || []).slice();
-  const byId = new Map(out.map((t, i) => [t.id, i]));
-  const byKey = new Map();
-  out.forEach((t, i) => {
-    const k = `${urlKey(t.url)}|${normForMatch(t.title)}`;
-    if (!byKey.has(k)) byKey.set(k, i);
-  });
-  for (const t of incoming || []) {
-    const k = `${urlKey(t.url)}|${normForMatch(t.title)}`;
-    const i = byId.has(t.id) ? byId.get(t.id) : byKey.get(k);
-    if (i === undefined) {
-      byId.set(t.id, out.length);
-      byKey.set(k, out.length);
-      out.push(t);
-    } else {
-      const old = out[i];
-      out[i] = { ...old, ...t, id: old.id, status: old.status || t.status };
-    }
-  }
-  return out
-    .sort((a, b) => (b.relevance || 0) - (a.relevance || 0) || Date.parse(b.publishedAt || 0) - Date.parse(a.publishedAt || 0))
-    .slice(0, 80);
-}
-
-async function rankWithAI(results, c) {
-  const items = results.map((r, i) => ({ i, source: r.source, title: clip(r.title, 160), snippet: clip(r.snippet, 650), url: r.url }));
-  const out = await ai.json({
-    system:
-      'You are the research analyst inside Lens, a tool that helps a founder find people who have the problem their product solves. ' +
-      'Score each public conversation honestly; most search results are NOT good leads.',
-    prompt: `${companyBrief(c)}
-
-Score these search results. For each, decide how clearly the AUTHOR personally describes the problem this product solves and would plausibly welcome a helpful reply.
-- relevance: 0-100 (90+ = explicit pain + asking for help; 60-89 = clear pain; 30-59 = adjacent; <30 = not a lead, e.g. news, vendor pages, listicles)
-- painPoint: a 2-4 word Title Case label for the underlying problem; REUSE the same label for results about the same problem
-- intent: "high" (actively seeking a solution), "medium" (complaining / describing the pain), "low" (tangential)
-- quote: copy the single most telling sentence EXACTLY, character for character, from the snippet (max 200 chars). Empty string if none.
-- author: the handle or name if it appears in the snippet or URL, else ""
-
-Results:
-${JSON.stringify(items, null, 1)}`,
-    schemaHint: '[{"i":0,"relevance":0,"painPoint":"","intent":"high|medium|low","quote":"","author":""}]',
-    maxTokens: 3000,
-  });
-  const list = Array.isArray(out) ? out : Array.isArray(out?.results) ? out.results : [];
-  return new Map(list.filter((x) => Number.isInteger(x?.i)).map((x) => [x.i, x]));
-}
-
-function buildThread(r, scored, c) {
-  const h = heuristicScore(r, c);
-  const s = scored || {};
-  let quote = typeof s.quote === 'string' ? s.quote.trim() : '';
-  if (!quote || !normForMatch(r.snippet).includes(normForMatch(quote))) quote = bestQuote(r.snippet);
-  const intent = ['high', 'medium', 'low'].includes(s.intent) ? s.intent : h.intent;
-  const relevance = Number.isFinite(Number(s.relevance)) ? Math.max(0, Math.min(100, Math.round(Number(s.relevance)))) : h.relevance;
-  return {
-    id: uid('t'),
-    source: r.source,
-    community: communityOf(r.url, r.source),
-    title: r.title,
-    url: r.url,
-    author: (s.author || '').trim() || authorOf(r.url, r.source),
-    snippet: r.snippet,
-    quote,
-    publishedAt: r.publishedAt || nowIso(),
-    relevance,
-    painPoint: (s.painPoint || '').trim() || h.painPoint,
-    intent,
-    engagement: { replies: 0, upvotes: 0 },
-    status: 'new',
-  };
-}
-
-function demoThreadsFor(query) {
-  const base = demoList('threads');
-  const q = words(query).filter((w) => w.length > 2 && !STOP_WORDS.has(w));
-  if (!q.length) return base;
-  const score = (t) => q.filter((w) => `${t.title} ${t.snippet} ${t.painPoint} ${t.community}`.toLowerCase().includes(w)).length;
-  return base
-    .map((t) => ({ t, s: score(t) }))
-    .sort((a, b) => b.s - a.s || (b.t.relevance || 0) - (a.t.relevance || 0))
-    .map(({ t, s }) => (s ? { ...t, relevance: Math.min(99, (t.relevance || 0) + 3 * s) } : t));
-}
-
-export async function findConversations({ query } = {}) {
-  return withLoading('threads', async () => {
-    await warm();
-    const c = company();
-    let incoming = null;
-    if (canUseYou()) {
-      try {
-        const kw = (c.keywords || []).slice(0, 4);
-        const topic = String(query || '').trim() || kw.slice(0, 3).join(', ') || c.field || c.name;
-        const searches = [
-          you.search(`${topic} — people asking for help, advice or recommendations`, { count: 20, freshness: 'month', siteFilters: COMMUNITY_DOMAINS }),
-          you.search(`${topic} frustrated OR struggling OR "how do I" ${c.audience ? `(${clip(c.audience, 60)})` : ''}`.trim(), { count: 15, freshness: 'month' }),
-        ];
-        const settled = await Promise.allSettled(searches);
-        const ok = settled.filter((s) => s.status === 'fulfilled').flatMap((s) => s.value);
-        if (!ok.length) throw settled.find((s) => s.status === 'rejected')?.reason || new Error('No conversations found.');
-        const ownHost = hostOf(c.url);
-        const seen = new Set();
-        const results = ok.filter((r) => {
-          const k = urlKey(r.url);
-          if (!r.url || seen.has(k) || (ownHost && hostOf(r.url) === ownHost) || !r.snippet) return false;
-          seen.add(k);
-          return true;
-        }).slice(0, 30);
-        let scored = new Map();
-        if (canUseAI() && results.length) {
-          try {
-            scored = await rankWithAI(results, c);
-          } catch (e) {
-            console.warn('[Lens] AI ranking failed, using heuristic', e);
-            if (e?.code !== 'no-relay') toast(`${aiName()} ranking failed (${e.message}) — used keyword scoring instead.`, 'error');
-          }
-        }
-        incoming = results
-          .map((r, i) => buildThread(r, scored.get(i), c))
-          .filter((t) => t.relevance >= 30)
-          .sort((a, b) => b.relevance - a.relevance)
-          .slice(0, 25);
-        if (!incoming.length) toast('No strong conversations found this time — try a more specific search.', 'info');
-      } catch (e) {
-        fallbackToast('Conversation search', e);
-        incoming = null;
-      }
-    }
-    const live = Boolean(incoming);
-    if (!incoming) {
-      await delay();
-      incoming = demoThreadsFor(query);
-    }
-    // Live results replace the bundled sample conversations instead of mixing with them.
-    // Keep samples the founder acted on (saved/contacted) or that a draft still points at.
-    const referenced = new Set((getState().drafts || []).map((d) => d.threadId).filter(Boolean));
-    const seedIds = live && incoming.length ? new Set(demoList('threads').map((t) => t.id)) : null;
-    const existing = (getState().threads || []).filter((t) => !seedIds || !seedIds.has(t.id) || (t.status && t.status !== 'new') || referenced.has(t.id));
-    const threads = mergeThreads(existing, incoming);
-    setState((s) => ({ threads, ui: { ...s.ui, lastRefresh: nowIso() } }));
-    return threads;
-  });
-}
-
-// ============================================================== trends & events
-
-export async function loadTrends() {
-  return withLoading('trends', async () => {
-    await warm();
-    const c = company();
-    let trends = null;
-    if (canUseYou()) {
-      try {
-        const results = (await you.news(`${c.field || c.keywords?.[0] || c.name} news this week`, { count: 15 })).filter((r) => r.title && r.url);
-        if (!results.length) throw new Error('No recent news found.');
-        let picked = results.slice(0, 6).map((r, i) => ({ r, i, summary: clip(r.snippet, 180), tag: titleCase(c.keywords?.[0] || 'News') }));
-        if (canUseAI()) {
-          try {
-            const out = await ai.json({
-              system: 'You curate a short news digest for a startup founder.',
-              prompt: `${companyBrief(c)}
-
-Pick the 6 items most useful for this founder to know about or post about this week. For each, write a one-sentence summary of what happened and why it matters to them, and a 1-2 word tag.
-
-${JSON.stringify(results.map((r, i) => ({ i, title: r.title, snippet: clip(r.snippet, 400), date: r.publishedAt })), null, 1)}`,
-              schemaHint: '[{"i":0,"summary":"","tag":""}]',
-              maxTokens: 1500,
-            });
-            const list = (Array.isArray(out) ? out : []).filter((x) => results[x?.i]);
-            if (list.length) picked = list.slice(0, 6).map((x) => ({ r: results[x.i], i: x.i, summary: x.summary || clip(results[x.i].snippet, 180), tag: x.tag || 'News' }));
-          } catch (e) {
-            console.warn('[Lens] AI trend summary failed', e);
-          }
-        }
-        trends = picked.map(({ r, summary, tag }) => ({
-          id: uid('tr'),
-          title: r.title,
-          summary,
-          url: r.url,
-          source: hostOf(r.url) || 'web',
-          publishedAt: r.publishedAt || nowIso(),
-          tag,
-        }));
-      } catch (e) {
-        fallbackToast('Trends', e);
-      }
-    }
-    if (!trends) {
-      await delay();
-      trends = demoList('trends');
-    }
-    setState({ trends });
-    return trends;
-  });
-}
-
-export async function loadEvents() {
-  return withLoading('events', async () => {
-    await warm();
-    const c = company();
-    let events = null;
-    if (canUseYou() && !canUseAI()) {
-      toast('Live events need the AI provider to read dates — showing sample events.', 'info');
-    } else if (canUseYou()) {
-      try {
-        const loc = c.location ? ` ${c.location}` : '';
-        const results = await you.search(`founder startup events meetups this week ${c.field || ''}${loc}`.trim(), { count: 15, freshness: 'month' });
-        if (!results.length) throw new Error('No event listings found.');
-        const now = new Date();
-        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time';
-        const out = await ai.json({
-          system: 'You extract upcoming events from search results for a startup founder. Never invent events, dates or URLs.',
-          prompt: `${companyBrief(c)}
-
-Today is ${now.toDateString()} (${now.toISOString()}), time zone ${tz}.
-From the search results below, extract events that have an explicit date within the next 7 days. If a listing gives no year, assume the nearest future date. Skip anything without a date.
-- start/end: ISO 8601 with time zone offset (estimate end as start + 2h if missing)
-- format: "in-person" or "virtual"
-- url: must be exactly the result URL it came from
-- why: one sentence on why this founder should go
-
-${JSON.stringify(results.map((r) => ({ title: r.title, url: r.url, snippet: clip(r.snippet, 500), published: r.publishedAt })), null, 1)}`,
-          schemaHint: '[{"title":"","start":"","end":"","location":"","format":"in-person|virtual","url":"","host":"","why":""}]',
-          maxTokens: 2000,
-        });
-        const allowed = new Set(results.map((r) => urlKey(r.url)));
-        const horizon = Date.now() + 8 * 86400000;
-        const parsed = (Array.isArray(out) ? out : [])
-          .filter((e) => e?.title && e?.start && allowed.has(urlKey(e.url)))
-          .map((e) => {
-            const start = new Date(e.start);
-            const end = e.end ? new Date(e.end) : new Date(start.getTime() + 2 * 3600000);
-            return {
-              id: uid('ev'),
-              title: e.title,
-              start: start.toISOString(),
-              end: (Number.isNaN(end.getTime()) ? new Date(start.getTime() + 2 * 3600000) : end).toISOString(),
-              location: e.location || (e.format === 'virtual' ? 'Online' : ''),
-              format: e.format === 'virtual' ? 'virtual' : 'in-person',
-              url: e.url,
-              host: e.host || hostOf(e.url),
-              why: e.why || '',
-              _t: start.getTime(),
-            };
-          })
-          .filter((e) => Number.isFinite(e._t) && e._t >= Date.now() - 6 * 3600000 && e._t <= horizon)
-          .sort((a, b) => a._t - b._t)
-          .map(({ _t, ...e }) => e);
-        if (!parsed.length) throw new Error('No dated events in the next 7 days were found.');
-        events = parsed;
-      } catch (e) {
-        fallbackToast('Events', e);
-      }
-    }
-    if (!events) {
-      await delay();
-      events = demoList('events');
-    }
-    // Keep "Add to my week" flags across refreshes (live ids are regenerated, so also match by url+title).
-    const savedPrev = (getState().events || []).filter((e) => e && e.saved);
-    if (savedPrev.length) {
-      const ids = new Set(savedPrev.map((e) => e.id));
-      const keys = new Set(savedPrev.map((e) => urlKey(e.url) + '|' + e.title));
-      events = events.map((e) => (ids.has(e.id) || keys.has(urlKey(e.url) + '|' + e.title) ? { ...e, saved: true } : e));
-    }
-    setState({ events });
-    return events;
-  });
-}
-
-export async function refreshAll() {
-  return withLoading('refresh', async () => {
-    const [trends, events, threads] = await Promise.allSettled([loadTrends(), loadEvents(), findConversations()]);
-    setState((s) => ({ ui: { ...s.ui, lastRefresh: nowIso() } }));
-    const val = (r, key) => (r.status === 'fulfilled' ? r.value : getState()[key]);
-    return { trends: val(trends, 'trends'), events: val(events, 'events'), threads: val(threads, 'threads') };
-  });
-}
-
-// ============================================================== drafting
-
-function outreachSystem(c, kind, thread) {
-  const limit = kind === 'dm' ? 70 : 90;
-  return `You write ${kind === 'dm' ? 'a private direct message' : `a public reply in ${thread.community || 'the thread'}`} on behalf of the founder of ${c.name}.
-Rules:
-- Helpful first: open by engaging with their actual situation and give one concrete, useful suggestion that works even without the product.
-- Reference the person's specific words — quote or closely paraphrase a detail from their post.
-- Disclose plainly that you are the founder of ${c.name} (e.g. "Full disclosure: I'm building ${c.name}").
-- No hard sell: no "DM me", no "sign up", no urgency, no superlatives. At most one mention of the product and at most one link.
-- ${kind === 'dm' ? 'End with one low-pressure question or an easy way to say no.' : 'Write it as a natural comment from a peer.'}
-- Founder voice: ${c.voice || 'warm, direct, plain language'}.
-- No hashtags. No emojis. At most ${limit} words.
-Output only the message text.`;
-}
-
-export async function draftOutreach(threadId, kind = 'reply') {
-  const k = kind === 'dm' ? 'dm' : 'reply';
-  const thread = findThread(threadId);
-  if (!thread) throw new Error('That conversation is no longer in your list.');
-  return withLoading(`draft:${threadId}`, async () => {
-    await warm();
-    const c = company();
-    let body = '';
-    if (canUseAI()) {
-      try {
-        const text = await ai.complete({
-          system: outreachSystem(c, k, thread),
-          messages: [{
-            role: 'user',
-            content: `${companyBrief(c)}
-
-Their post (${thread.source}, ${thread.community || ''}${thread.author ? `, by ${thread.author}` : ''}):
-Title: ${thread.title}
-Post: ${thread.snippet}
-Key quote: "${thread.quote}"
-Pain point: ${thread.painPoint}
-
-Write the ${k === 'dm' ? 'DM' : 'reply'}.`,
-          }],
-          maxTokens: 500,
-          effort: 'medium',
-        });
-        body = clampWords(cleanMessage(text), k === 'dm' ? 70 : 90);
-      } catch (e) {
-        fallbackToast(`Drafting with ${aiName()}`, e);
-      }
-    }
-    if (!body) {
-      await delay();
-      body = asText(k === 'dm' ? dmTemplate(thread, c) : replyTemplate(thread, c));
-    }
-    const at = nowIso();
-    const draft = {
-      id: uid('d'),
-      kind: k,
-      threadId,
-      title: thread.title,
-      body,
-      status: 'pending',
-      createdAt: at,
-      updatedAt: at,
-      channel: linkedinConnected() ? 'linkedin' : 'copy',
-      painPoint: thread.painPoint,
-    };
-    addDrafts([draft]);
-    if (thread.status === 'new' || thread.status === 'saved') setThreadStatus(threadId, 'drafted');
-    return draft;
-  });
-}
-
-const POST_RULES = `LinkedIn post rules:
-- LinkedIn-native: the first line is a hook (max 12 words, specific, no clickbait), then short paragraphs separated by blank lines.
-- 120 to 220 words.
-- Ground it in what real people said in the conversations (paraphrase; never name or tag individuals).
-- Give genuinely useful insight or advice; mention the product at most once, near the end, with a plain disclosure that you're building it.
-- No hashtag spam: at most 3 hashtags, only at the very end (zero is fine). No emoji walls.
-- End with a genuine question to the reader.`;
-
-function normalizePost(p, fallbackTitle) {
-  const body = limitHashtags(cleanMessage(p?.body || ''), 3);
-  return {
-    // Titles publish as the post's first line (see postText), so never invent one from a label.
-    title: clip(String(p?.title || '').trim(), 90),
-    body,
-    visualIdea: (p?.visualIdea || '').trim(),
-    sculptexPrompt: (p?.sculptexPrompt || '').trim(),
-  };
-}
-
-function demoPost(painPoint, threads, c, variant = 0) {
-  const raw = variant > 0 ? altPostTemplate(painPoint, threads, c, variant) : postTemplate(painPoint, threads, c);
-  const body = asText(raw);
-  const vis = postVisual(painPoint);
-  return {
-    // The body already opens with its hook; a separate title would publish it twice.
-    title: (raw && raw.title) || '',
-    body,
-    visualIdea: (raw && raw.visualIdea) || vis.visualIdea,
-    sculptexPrompt: (raw && raw.sculptexPrompt) || vis.sculptexPrompt || demo?.sculptexDemoPrompt || '',
-  };
-}
-
-export async function draftPost({ painPoint, threadIds = [], angle, source } = {}) {
-  return withLoading('post', async () => {
-    await warm();
-    const c = company();
-    const all = getState().threads || [];
-    let threads = all.filter((t) => threadIds.includes(t.id));
-    if (!threads.length && painPoint) threads = all.filter((t) => t.painPoint === painPoint && t.status !== 'dismissed');
-    const label = painPoint || threads[0]?.painPoint || 'What we keep hearing';
-    let post = null;
-    if (canUseAI()) {
-      try {
-        const out = await ai.json({
-          system: `You ghostwrite LinkedIn posts for the founder of ${c.name}. Voice: ${c.voice || 'warm, direct, plain language'}.\n${POST_RULES}`,
-          prompt: `${companyBrief(c)}
-
-Recurring pain point: ${label}
-${angle ? `Angle requested by the founder: ${angle}\n` : ''}What people said:
-${threads.slice(0, 6).map((t) => `- (${t.community || t.source}) "${clip(t.quote || t.snippet, 240)}"`).join('\n') || '- (no specific conversations selected)'}
-
-Write the post. Also give a one-line visual idea and, if a physical object fits the post, a one-sentence Sculptex prompt describing an exact 3D-printable part to render (dimensions welcome); else "".`,
-          schemaHint: '{"title":"","body":"","visualIdea":"","sculptexPrompt":""}',
-          maxTokens: 1400,
-          effort: 'medium',
-        });
-        post = normalizePost(out, label);
-        if (countWords(post.body) < 60) post = null;
-      } catch (e) {
-        fallbackToast(`Drafting the post with ${aiName()}`, e);
-      }
-    }
-    const srcType = source?.type === 'trend' || source?.type === 'free' ? source.type : 'pain';
-    if (!post) {
-      await delay();
-      const trend = srcType === 'trend' ? (getState().trends || []).find((t) => t.id === source.trendId) : null;
-      if (trend) post = demoTrendPost(trend, await clusterPainPoints(), c);
-      else if (srcType === 'free' && (source.text || angle)) post = demoIdeaPost(source.text || angle, c);
-      else post = demoPost(label, threads.length ? threads : all, c);
-    }
-    const at = nowIso();
-    const draft = {
-      id: uid('d'),
-      kind: 'post',
-      title: post.title,
-      body: post.body,
-      status: 'pending',
-      createdAt: at,
-      updatedAt: at,
-      channel: 'linkedin',
-      // Trend headlines and free-text ideas are not pain points.
-      painPoint: srcType === 'pain' ? label : undefined,
-      source: { type: srcType, label, threadIds: threads.map((t) => t.id), ...(srcType === 'trend' ? { trendId: source.trendId } : {}) },
-      visualIdea: post.visualIdea,
-      sculptexPrompt: post.sculptexPrompt,
-    };
-    addDrafts([draft]);
-    return draft;
-  });
-}
-
-function demoRewrite(body, instruction, draft) {
-  const ins = String(instruction || '').toLowerCase();
-  let out = String(body || '');
-  let changed = false;
-  if (/short|concise|tight|trim|brief/.test(ins)) {
-    const target = Math.max(25, Math.round(countWords(out) * 0.6));
-    out = clampWords(out, target);
-    changed = true;
-  }
-  if (/warm|friendl|kind|empath/.test(ins)) {
-    if (!/^(thanks|really|totally|appreciate)/i.test(out)) out = `Really appreciate you sharing this.\n\n${out}`;
-    changed = true;
-  }
-  if (/question/.test(ins)) {
-    if (!/\?\s*(#\S+\s*)*$/.test(out.trim())) out = `${out.trim()}\n\nWhat would you add?`;
-    changed = true;
-  }
-  if (/specific|detail|concrete/.test(ins)) {
-    const t = draft?.threadId ? findThread(draft.threadId) : null;
-    const q = t?.quote || '';
-    if (q && !out.includes(clip(q, 60).replace(/…$/, ''))) out = `${out.trim()}\n\n(Thinking specifically about: "${clip(q, 140)}")`;
-    else if (draft?.painPoint) out = `${out.trim()}\n\nThe specific piece I mean: ${draft.painPoint.toLowerCase()}.`;
-    changed = true;
-  }
-  if (/formal|professional/.test(ins)) {
-    out = out.replace(/!+/g, '.').replace(/\b(gonna|wanna)\b/gi, (m) => (m.toLowerCase() === 'gonna' ? 'going to' : 'want to'));
-    changed = true;
-  }
-  if (/casual|relaxed|less formal/.test(ins)) {
-    out = out.replace(/\bI am\b/g, "I'm").replace(/\bdo not\b/g, "don't").replace(/\bit is\b/g, "it's");
-    changed = true;
-  }
-  if (/hook/.test(ins)) {
-    const lines = out.split('\n');
-    const i = lines.findIndex((l) => l.trim());
-    if (i >= 0) {
-      const topic = String(draft?.painPoint || '').trim();
-      const hook = topic
-        ? `${topic}: the part nobody warns you about.`
-        : `${lines[i].trim().replace(/[.!?…]+$/, '')}. Here's what actually helps.`;
-      if (lines[i].trim() !== hook) {
-        lines[i] = hook;
-        out = lines.join('\n');
-        changed = true;
-      }
-    }
-  }
-  if (/pitch|sales|salesy|promo/.test(ins)) {
-    // Keep a one-sentence founder disclosure; drop the product pitch around it.
-    const PITCH = /(you can describe|happy to |if it's (relevant|helpful)|i could also|get an editable model|it's our attempt|you describe the part)/i;
-    out = out
-      .split('\n')
-      .map((line) => {
-        const sentences = line.split(/(?<=[.!?]["”)]?)\s+/);
-        if (/disclosure:/i.test(line)) return sentences[0].trim();
-        if (!PITCH.test(line)) return line;
-        return sentences.filter((x) => !PITCH.test(x)).join(' ').trim();
-      })
-      .join('\n')
-      .replace(/\n{3,}/g, '\n\n');
-    changed = true;
-  }
-  if (/hashtag/.test(ins) && /remove|no|drop|without/.test(ins)) {
-    out = out.replace(/(^|\s)#[A-Za-z][\w-]*/g, '').trim();
-    changed = true;
-  }
-  return { body: out.trim(), changed };
-}
-
-export async function rewrite(draftId, instruction) {
-  const draft = findDraft(draftId);
-  const ins = String(instruction || '').trim();
-  if (!ins) return draft;
-  return withLoading(`rewrite:${draftId}`, async () => {
-    await warm();
-    let body = '';
-    if (canUseAI()) {
-      try {
-        const c = company();
-        const limits = draft.kind === 'dm' ? 'at most 70 words' : draft.kind === 'reply' ? 'at most 90 words' : '120-220 words, max 3 hashtags at the end, ending with a question';
-        const text = await ai.complete({
-          system: `You edit outreach and LinkedIn copy for the founder of ${c.name}. Keep the founder disclosure, stay helpful and non-salesy, keep facts and quotes accurate, ${limits}. Voice: ${c.voice || 'warm, direct'}. Output only the revised text.`,
-          messages: [{ role: 'user', content: `Instruction: ${ins}\n\nCurrent ${draft.kind}:\n${draft.body}` }],
-          maxTokens: 900,
-        });
-        body = cleanMessage(text);
-        if (draft.kind === 'dm') body = clampWords(body, 70);
-        else if (draft.kind === 'reply') body = clampWords(body, 90);
-        else body = limitHashtags(body, 3);
-      } catch (e) {
-        fallbackToast(`Rewrite with ${aiName()}`, e);
-      }
-    }
-    if (!body) {
-      await delay();
-      const r = demoRewrite(draft.body, ins, draft);
-      body = r.body;
-      if (!r.changed) toast('Demo mode handles shorter / warmer / more specific / add a question. Turn off demo mode with a You.com key for free-form rewrites.', 'info');
-    }
-    return updateDraft(draftId, { body });
-  });
-}
-
-export async function clusterPainPoints() {
-  const threads = (getState().threads || []).filter((t) => t.status !== 'dismissed' && t.painPoint);
-  const groups = new Map();
-  for (const t of threads) {
-    const key = t.painPoint.trim().toLowerCase();
-    if (!groups.has(key)) groups.set(key, { painPoint: t.painPoint.trim(), threads: [] });
-    groups.get(key).threads.push(t);
-  }
-  return [...groups.values()]
-    .map((g) => {
-      const sorted = g.threads.slice().sort((a, b) => (b.relevance || 0) - (a.relevance || 0));
-      const top = sorted[0];
-      return {
-        painPoint: g.painPoint,
-        count: g.threads.length,
-        threadIds: sorted.map((t) => t.id),
-        example: top?.quote || top?.snippet || top?.title || '',
-        relevance: Math.round(sorted.reduce((n, t) => n + (t.relevance || 0), 0) / sorted.length),
-        hot: sorted.filter((t) => t.intent === 'high').length,
-      };
-    })
-    .sort((a, b) => b.count - a.count || b.relevance - a.relevance);
-}
-
-// ============================================================== sending & scheduling (LinkedIn is MOCKED)
-
-function copyText(text) {
-  try {
-    if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text).then(() => true, () => legacyCopy(text));
-  } catch { /* fall through */ }
-  return Promise.resolve(legacyCopy(text));
-}
-
-function legacyCopy(text) {
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.setAttribute('readonly', '');
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    const ok = document.execCommand('copy');
-    ta.remove();
-    return ok;
+    const part = String(token || '').split('.')[1];
+    if (!part) return '';
+    const data = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/')));
+    return String(data.name || data.display_name || data.email || '').trim();
   } catch {
-    return false;
+    return '';
   }
 }
 
-/** The exact text a post publishes: title as a first line (unless the body already opens with it), then body. */
-export function postText(d) {
-  const t = String(d?.title || '').trim();
-  const b = String(d?.body || '').trim();
-  if (!t) return b;
-  const head = t.replace(/…$/, '').trim();
-  return head && b.startsWith(head) ? b : `${t}\n\n${b}`;
+const accountLookups = {};
+
+function fillAccount(key) {
+  if (!accountLookups[key]) accountLookups[key] = lookupAccount(key).finally(() => { accountLookups[key] = null; });
+  return accountLookups[key];
 }
 
-export async function sendDraft(draftId) {
-  const draft = findDraft(draftId);
-  if (draft.status === 'sent' || draft.status === 'posted') return draft;
-  if (draft.status === 'rejected') throw new Error('This draft was rejected — restore it before sending.');
-  const thread = draft.threadId ? findThread(draft.threadId) : null;
-  const isPost = draft.kind === 'post';
-  const text = isPost ? postText(draft) : draft.body;
-
-  if (!linkedinConnected()) {
-    // Copy + open, done synchronously inside the click so the browser allows the clipboard and the new tab.
-    const copied = copyText(text);
-    const target = isPost ? 'https://www.linkedin.com/feed/' : thread?.url;
-    if (target) {
-      try { window.open(target, '_blank', 'noopener'); } catch { /* popup blocked */ }
-    }
-    const ok = await copied;
-    const at = nowIso();
-    const updated = updateDraft(draftId, isPost ? { status: 'posted', postedAt: at, channel: 'copy', error: '' } : { status: 'sent', postedAt: at, channel: 'copy', error: '' });
-    if (!isPost) setThreadStatus(draft.threadId, 'contacted');
-    toast(
-      ok
-        ? `Copied to clipboard${target ? ' — paste it in the tab we opened' : ''}.`
-        : `Couldn't copy automatically — select the text and copy it${target ? ', then paste it in the tab we opened' : ''}.`,
-      ok ? 'success' : 'info',
-    );
-    return updated;
-  }
-
-  if (sendingNow.has(draftId)) return draft;
-  sendingNow.add(draftId);
+async function lookupAccount(key) {
   try {
-    await delay(500, 800);
-    const at = nowIso();
-    const entry = {
-      id: uid('li'),
-      draftId,
-      kind: draft.kind,
-      body: text,
-      // data: URLs are not duplicated into the feed; PublishedFeed looks them up from the draft.
-      visual: draft.visual && !/^data:/.test(draft.visual.src || '') ? draft.visual : undefined,
-      to: isPost ? undefined : thread?.author || undefined,
-      threadUrl: isPost ? undefined : thread?.url || undefined,
-      at,
-      reactions: 0,
-      comments: 0,
-      impressions: 0,
-      reposts: 0,
-      profileViews: 0,
-    };
-    setState((s) => ({ linkedinFeed: [entry, ...(s.linkedinFeed || [])] }));
-    const updated = updateDraft(draftId, isPost ? { status: 'posted', postedAt: at, channel: 'linkedin', error: '' } : { status: 'sent', postedAt: at, channel: 'linkedin', error: '' });
-    if (!isPost) setThreadStatus(draft.threadId, 'contacted');
-    toast(isPost ? 'Published to LinkedIn (demo).' : `${draft.kind === 'dm' ? 'DM' : 'Reply'} sent via LinkedIn (demo).`, 'success');
-    return updated;
-  } finally {
-    sendingNow.delete(draftId);
+    let account = '';
+    if (key === 'canva') {
+      const tool = mcp.findTool('canva', CANVA_TOOLS.profile.names);
+      if (tool) {
+        const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, canvaArgs(tool, {})));
+        account = findKey(parsed.json, ['display_name', 'displayName', 'name', 'email'], (v) => typeof v === 'string' && v.trim()) || '';
+      }
+    }
+    if (!account) account = decodeJwtName(mcp.getConnection(key).auth?.accessToken);
+    if (account) mcp.patchConn(key, { account: String(account).trim().slice(0, 120) });
+  } catch (e) {
+    console.warn(`[Lens] ${mcp.label(key)} account lookup failed`, e);
   }
 }
 
-export async function connectLinkedIn() {
-  patchConnection('linkedin', { status: 'connecting', profile: null });
-  await delay(800, 800);
-  const p = demo?.linkedinProfile || {};
-  const c = company();
-  const profile = {
-    name: p.name || 'Founder',
-    headline: p.headline || `Building ${c.name}`,
-    initials: p.initials || (p.name || 'F').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase(),
-    ...p,
-  };
-  patchConnection('linkedin', { status: 'connected', profile, connectedAt: nowIso() });
-  toast('LinkedIn (demo) connected — nothing is sent to the real LinkedIn.', 'success');
-  return profile;
+mcp.onConnected((key) => fillAccount(key));
+
+// ---- init / connect / disconnect
+
+let initPromise = null;
+
+/** Call once on load: completes any OAuth return and refreshes connection status. */
+export function init() {
+  if (!initPromise) initPromise = doInit();
+  return initPromise;
 }
 
-export async function disconnectLinkedIn() {
-  patchConnection('linkedin', { status: 'disconnected', profile: null });
+function stripLinkedInFlag() {
+  let params;
+  try {
+    params = new URLSearchParams(location.search);
+  } catch {
+    return null;
+  }
+  const flag = params.get('li');
+  if (!flag) return null;
+  const reason = params.get('reason') || '';
+  params.delete('li');
+  params.delete('reason');
+  const qs = params.toString();
+  try {
+    history.replaceState(history.state, '', `${location.pathname}${qs ? `?${qs}` : ''}${location.hash || ''}`);
+  } catch {
+    /* ignore */
+  }
+  return { flag, reason };
+}
+
+async function doInit() {
+  const out = {};
+  // 1) Canva / Sculptex OAuth return (?code=&state= on this page).
+  if (mcp.hasPendingCallback()) {
+    const r = await mcp.handleOAuthCallback();
+    if (r && r.label) out.returnedFrom = r.label;
+    if (r && !r.ok && r.error) out.error = r.error;
+  } else {
+    // Not returning from sign-in: a connection left "connecting" (back button on the sign-in page) is not connected.
+    for (const key of Object.values(MCP_KEYS)) {
+      if (mcp.getConnection(key).status === 'connecting') mcp.patchConn(key, { status: 'disconnected' });
+    }
+    try {
+      const params = new URLSearchParams(location.search);
+      if (params.get('state') && (params.get('code') || params.get('error')) && !params.get('li')) {
+        const r = await mcp.handleOAuthCallback(); // cleans the URL, reports an expired sign-in
+        if (r && r.error) out.error = r.error;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  // 2) LinkedIn return (?li=connected | ?li=error&reason=…).
+  const li = stripLinkedInFlag();
+  if (li) {
+    out.returnedFrom = 'LinkedIn';
+    if (li.flag !== 'connected') out.error = LINKEDIN_REASONS[li.reason] || 'LinkedIn sign-in failed. Try connecting again.';
+  }
+  await linkedin.status();
+  if (li && li.flag !== 'connected') linkedin.setError(out.error);
+  else if (li && !linkedin.current().connected) {
+    out.error = 'LinkedIn sign-in finished, but the session was not saved. Check that cookies are allowed and try again.';
+    linkedin.setError(out.error);
+  }
+  // 3) Account names for MCP connections restored from sessionStorage.
+  for (const key of Object.values(MCP_KEYS)) {
+    const c = mcp.getConnection(key);
+    if (c.status === 'connected' && !c.account) fillAccount(key);
+  }
+  you.status();
+  emit();
+  return out;
+}
+
+// Back from a provider's sign-in page through the back/forward cache: this module does not run again, so undo the
+// "connecting" state init() would have cleared on a fresh load and re-check LinkedIn.
+try {
+  globalThis.addEventListener?.('pageshow', (event) => {
+    if (!event || !event.persisted) return;
+    for (const key of Object.values(MCP_KEYS)) {
+      if (mcp.getConnection(key).status === 'connecting') mcp.patchConn(key, { status: 'disconnected' });
+    }
+    linkedin.status().finally(() => emit());
+  });
+} catch {
+  /* no window (tests) */
+}
+
+/** Connect a provider. Throws code 'redirect' when the page is navigating to the provider's sign-in. */
+export async function connect(provider) {
+  const p = providerName(provider);
+  if (!p) throw err('', `Unknown provider: ${provider}`);
+  if (p === 'LinkedIn') {
+    await linkedin.connect(); // navigates away (throws 'redirect') or throws a readable error
+    return connections().LinkedIn;
+  }
+  const key = MCP_KEYS[p];
+  const conn = await mcp.connect(key);
+  if (conn && conn.redirecting) throw err('redirect', `Opening ${p} sign-in…`);
+  if (conn && conn.status === 'connected') await fillAccount(key);
+  emit();
+  return connections()[p];
+}
+
+export async function disconnect(provider) {
+  const p = providerName(provider);
+  if (!p) return;
+  if (p === 'LinkedIn') await linkedin.disconnect();
+  else mcp.disconnect(MCP_KEYS[p]);
+  emit();
+}
+
+export async function disconnectAll() {
+  mcp.disconnectAll();
+  await linkedin.disconnect();
+  emit();
+}
+
+// ============================================================== scan
+
+/** Read a company website → { name, summary, product, audience?, keywords: [] }. */
+export async function scanSite(url) {
+  const target = normalizeSiteUrl(url);
+  if (!target) throw err('', 'Enter a company website, like you.com.');
+  const host = hostOf(target);
+
+  let page = null;
+  let pageError = null;
+  try {
+    page = await you.extract(target);
+  } catch (e) {
+    if (e.code === 'no-relay' || e.code === 'no-key' || e.code === 'credits') throw e;
+    pageError = e;
+  }
+  let material = page && page.markdown ? page.markdown : '';
+  if (material.length < 200) {
+    // Thin or failed extract: add what the web says about the site.
+    try {
+      const results = await you.search(`${host}`, { count: 6 });
+      const own = results.filter((r) => hostOf(r.url) === host || hostOf(r.url).endsWith(`.${host}`));
+      const use = (own.length ? own : results).slice(0, 5);
+      material += `\n\n${use.map((r) => `${r.title}\n${r.snippet}`).join('\n\n')}`;
+    } catch (e) {
+      if (!material) throw pageError || e;
+    }
+  }
+  material = material.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 14000);
+  if (!material) throw err('', `Lens could not read ${host}.`);
+
+  const out = await you.json({
+    system: 'You read a company website and describe the company for its founder. Use only what the page says; never invent facts. Plain text, no markdown.',
+    prompt: `Website: ${target}\nPage title: ${(page && page.title) || ''}\n\nPage content (markdown):\n${material}\n\nDescribe the company:
+- name: the company or product name as written on the site
+- summary: one line (max 20 words) saying what the product is and who it is for
+- product: one sentence (max 25 words) saying what the product helps customers do
+- audience: who it is for (a short phrase), or "" if unclear
+- keywords: 3 to 6 short topic keywords for the company's field (lowercase)`,
+    shape: '{"name": string, "summary": string, "product": string, "audience": string, "keywords": [string]}',
+    maxTokens: 900,
+    temperature: 0.2,
+  });
+  const name = str(out.name, 80) || (page && clip(page.title, 60)) || host;
+  const summary = plain(str(out.summary, 300)).replace(/\.$/, '');
+  const product = plain(str(out.product, 400));
+  if (!summary && !product) throw err('', `Lens could not tell what ${host} does.`);
+  const result = {
+    name,
+    summary: summary || product.replace(/\.$/, ''),
+    product: product || `${summary}.`,
+    keywords: (Array.isArray(out.keywords) ? out.keywords : []).map((k) => str(k, 40).toLowerCase()).filter(Boolean).slice(0, 6),
+  };
+  const audience = plain(str(out.audience, 200));
+  if (audience) result.audience = audience;
+  return result;
+}
+
+// ============================================================== onboarding
+
+const NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14 };
+
+function parseCadence(text) {
+  const t = String(text || '').toLowerCase();
+  if (/\btwice (?:a |per )?day\b|\btwice daily\b/.test(t)) return 14;
+  if (/\b(?:once (?:a |per )?day|daily|every day|each day)\b/.test(t)) return 7;
+  if (/\bevery (?:other|second) day\b/.test(t)) return 3;
+  if (/\b(?:per|a|each) month\b|\bmonthly\b/.test(t)) return null;
+  const m = t.match(/\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen)\b/);
+  if (m) {
+    const n = NUMBER_WORDS[m[1]] ?? Number(m[1]);
+    if (/\b(?:a|per|each) day\b|\bdaily\b/.test(t)) return Number.isInteger(n) && n >= 1 && n <= 2 ? n * 7 : null;
+    return Number.isInteger(n) && n >= 1 && n <= 14 ? n : null;
+  }
+  if (/\btwice\b/.test(t)) return 2;
+  if (/\bweekly\b|\bonce (?:a |per )?week\b|\bonce\b/.test(t)) return 1;
   return null;
 }
 
-export async function scheduleDraft(draftId, iso) {
-  findDraft(draftId);
-  const when = new Date(iso);
-  if (Number.isNaN(when.getTime())) throw new Error('Pick a valid date and time.');
-  notifiedDue.delete(draftId);
-  return updateDraft(draftId, { status: 'scheduled', scheduledFor: when.toISOString(), error: '' });
+function toCadence(v) {
+  if (typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 14) return v;
+  if (typeof v === 'string' && v.trim()) return parseCadence(v.trim()) || (/^\d+$/.test(v.trim()) && Number(v) >= 1 && Number(v) <= 14 ? Number(v) : null);
+  return null;
 }
 
-export function runDueSchedules() {
-  const now = Date.now();
-  const due = (getState().drafts || []).filter((d) => d.status === 'scheduled' && d.scheduledFor && Date.parse(d.scheduledFor) <= now);
-  if (!due.length) return [];
-  const connected = linkedinConnected();
-  for (const d of due) {
-    if (connected) {
-      sendDraft(d.id).catch((e) => {
-        updateDraft(d.id, { error: e.message || String(e) });
-        toast(`Couldn't publish "${clip(d.title || d.body, 40)}": ${e.message || e}`, 'error');
-      });
-    } else if (!notifiedDue.has(d.id)) {
-      notifiedDue.add(d.id);
-      toast(`"${clip(d.title || d.body, 48)}" is due — post it now from Schedule.`, 'info');
+function cleanAnswers(a) {
+  const out = {};
+  const src = a && typeof a === 'object' ? a : {};
+  for (const [key] of SLOTS) {
+    if (key === 'cadence') {
+      const c = toCadence(src.cadence);
+      if (c) out.cadence = c;
+    } else {
+      const v = plain(str(src[key], 400));
+      if (v.length >= 2) out[key] = v;
     }
   }
-  return due.map((d) => d.id);
+  return out;
 }
 
-// ============================================================== Sculptex (REAL MCP)
+function nextSlot(answers) {
+  return SLOTS.find(([k]) => answers[k] === undefined) || null;
+}
+
+function opener(site, scan) {
+  const name = str(scan && scan.name, 80) || hostOf(normalizeSiteUrl(site)) || str(site, 80) || 'your company';
+  const summary = str(scan && (scan.summary || scan.product), 240).replace(/\.$/, '');
+  if (summary) return `I read ${name}: ${summary}. Did I get that right? Correct anything that’s off, or describe what your company does in a sentence.`;
+  return `I’ll build a brand profile for ${name}. ${SLOTS[0][1]}`;
+}
+
+/** One onboarding chat turn. messages: [{ role:'agent'|'user', text }]. */
+export async function onboardTurn({ site, scan, answers, messages } = {}) {
+  const current = cleanAnswers(answers);
+  const list = (Array.isArray(messages) ? messages : [])
+    .filter((m) => m && typeof m.text === 'string' && m.text.trim())
+    .map((m) => ({ role: m.role === 'agent' ? 'agent' : 'user', text: m.text.trim().slice(0, 1500) }));
+
+  // No agent message yet: open with what the scan learned (no AI round trip needed).
+  if (!list.some((m) => m.role === 'agent')) {
+    const done = !nextSlot(current);
+    return { reply: done ? FINAL_REPLY : opener(site, scan), answers: current, done };
+  }
+
+  const slot = nextSlot(current);
+  const lastUser = [...list].reverse().find((m) => m.role === 'user');
+  const transcript = list.slice(-24).map((m) => `${m.role === 'agent' ? 'Lens' : 'Founder'}: ${m.text}`).join('\n');
+  const scanText = scan && typeof scan === 'object'
+    ? JSON.stringify({ name: scan.name, summary: scan.summary, product: scan.product, audience: scan.audience, keywords: scan.keywords })
+    : 'none (the scan did not work)';
+
+  const system = `You are Lens's onboarding agent. Through a short chat you build a brand profile for a founder's company, so Lens can write LinkedIn posts for them.
+
+Fill five slots, in this order:
+1. product: what the company does / what it helps customers do
+2. audience: who the posts should reach (a named group, e.g. "early-stage SaaS founders")
+3. goal: what the posts should achieve (concrete, e.g. "find our first 50 users")
+4. cadence: posts per week, an integer from 1 to 14
+5. voice: how the posts should sound; may include topics to avoid
+
+Rules:
+- Ask exactly one question per turn, about the first slot that is still empty.
+- Read the founder's latest message. If it answers the slot being asked, record it in their words, lightly cleaned up (one sentence, max 25 words).
+- If the answer is vague (like "idk", "everyone", "stuff", "grow", or too short to be useful), do not record it. Ask a friendly follow-up with a concrete example instead.
+- If the founder confirms the scanned description ("yes", "that's right", "correct"), record the scan's product description as product. If they correct it, record their correction.
+- cadence: convert phrases to an integer ("three times a week" → 3, "daily" → 7, "twice a day" → 14, "weekly" → 1). If it is outside 1–14 or unclear, do not record it; ask again and mention the 1–14 range.
+- One message may answer several slots; record every slot it clearly answers. The founder may also correct an earlier answer.
+- Never invent answers.
+- Replies are brief (1–2 sentences, max 40 words), friendly, plain text. No markdown, no lists, no emoji.
+- When all five slots are filled, set done to true and reply with a short wrap-up: you have enough to save the brand, and they can connect Canva for design, Sculptex for 3D visuals and LinkedIn for scheduling, or continue without connecting.`;
+
+  const prompt = `Company website: ${str(site, 300) || 'unknown'}
+Website scan: ${scanText}
+Slots already filled: ${JSON.stringify(current)}
+Slot being asked now: ${slot ? slot[0] : 'none (all filled)'}
+
+Conversation so far:
+${transcript}
+
+Return the slots recorded from the founder's latest message (and any corrections) in "answers" (omit slots you are not recording), your next message in "reply", and "done".`;
+
+  const out = await you.json({
+    system,
+    prompt,
+    shape: '{"reply": string, "answers": {"product"?: string, "audience"?: string, "goal"?: string, "cadence"?: integer, "voice"?: string}, "done": boolean}',
+    maxTokens: 900,
+    temperature: 0.3,
+  });
+
+  const merged = { ...current, ...cleanAnswers(out && out.answers) };
+  if (slot && slot[0] === 'cadence' && merged.cadence === undefined && lastUser) {
+    const c = parseCadence(lastUser.text);
+    if (c) merged.cadence = c;
+  }
+  const next = nextSlot(merged);
+  const done = !next;
+  let reply = clampWords(plain(str(out && out.reply, 1200)), 60);
+  if (done && !(out && out.done === true)) reply = FINAL_REPLY;
+  if (!done && (out && out.done === true)) reply = '';
+  if (!reply) reply = done ? FINAL_REPLY : next[1];
+  return { reply, answers: merged, done };
+}
+
+// ============================================================== posts
+
+function siteLabel(url) {
+  const h = hostOf(url);
+  if (!h) return 'Source';
+  if (h === 'news.ycombinator.com') return 'Hacker News';
+  if (h === 'reddit.com' || h.endsWith('.reddit.com')) return 'Reddit';
+  if (h === 'indiehackers.com') return 'Indie Hackers';
+  if (h === 'x.com' || h === 'twitter.com') return 'X';
+  if (h === 'linkedin.com' || h.endsWith('.linkedin.com')) return 'LinkedIn';
+  return h;
+}
+
+function resultsBlock(results) {
+  return results.map((r, i) => {
+    const date = r.publishedAt ? r.publishedAt.slice(0, 10) : 'undated';
+    return `[${i}] ${clip(r.title, 160)}\n    ${r.url}\n    ${date} · ${clip(r.snippet, 420)}`;
+  }).join('\n');
+}
+
+function mergeResults(lists, exclude = '') {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    for (const r of list) {
+      const key = r.url.replace(/[#?].*$/, '').replace(/\/$/, '').toLowerCase();
+      if (seen.has(key)) continue;
+      const h = hostOf(r.url);
+      if (exclude && (h === exclude || h.endsWith(`.${exclude}`))) continue;
+      seen.add(key);
+      out.push(r);
+    }
+  }
+  return out;
+}
+
+async function settledSearches(specs) {
+  const settled = await Promise.allSettled(specs.map(([q, opts]) => you.search(q, opts)));
+  const ok = settled.filter((s) => s.status === 'fulfilled').map((s) => s.value);
+  if (!ok.length) throw settled[0].reason;
+  return ok;
+}
+
+function asArray(v, key) {
+  if (Array.isArray(v)) return v;
+  if (v && typeof v === 'object') {
+    for (const k of [key, 'items', 'results', 'drafts']) if (Array.isArray(v[k])) return v[k];
+  }
+  return [];
+}
+
+/** LinkedIn post drafts grounded in fresh You.com results about the brand's field. */
+export async function generatePosts({ brand, count = 3 } = {}) {
+  const b = normBrand(brand);
+  const n = Math.max(1, Math.min(6, Number(count) || 3));
+  const topic = topicOf(b);
+  const aud = audienceShort(b);
+  const [news, trends] = await settledSearches([
+    [`${topic} news`, { count: 8, freshness: 'week' }],
+    [`${topic}${aud ? ` ${aud}` : ''} trends events`, { count: 8, freshness: 'month' }],
+  ]).then((lists) => (lists.length === 2 ? lists : [lists[0], []]));
+  const results = mergeResults([news, trends], hostOf(b.url)).slice(0, 14);
+
+  const system = `You write LinkedIn posts for a founder, in their brand voice. Each post is grounded in one recent web result about the founder's field (a trend, news story or event) and connects it to what the founder's company does.
+
+Rules for every post:
+- title: a hook headline, max 90 characters.
+- copy: 80–180 words, short paragraphs separated by blank lines, first person from the founder ("we" for the company).
+- At most 3 hashtags, at the very end. No emoji unless the voice asks for them. No markdown.
+- End the copy with a question to the reader.
+- Use only facts stated in the chosen result and the brand brief. Never invent numbers, quotes, names, dates or claims. If a detail is not in the result, leave it out.
+- Each post uses a different result. "source" is that result's number.
+- "topic" is 2–4 words naming what the result is about (e.g. "AI agent funding").
+- "visualIdea" is one sentence describing a simple image that would suit the post.`;
+
+  const prompt = `Brand brief:
+${brandBrief(b)}
+
+Recent web results:
+${results.length ? resultsBlock(results) : '(none found)'}
+
+Write ${n} different LinkedIn post${n === 1 ? '' : 's'}.${results.length ? '' : ' No results were found, so write from the brand brief only, with "source": null, and do not mention any news.'}`;
+
+  const out = await you.json({
+    system,
+    prompt,
+    shape: '[{"title": string, "copy": string, "source": integer|null, "topic": string, "visualIdea": string}]',
+    maxTokens: 3500,
+    temperature: 0.7,
+  });
+
+  const used = new Set();
+  const posts = [];
+  for (const p of asArray(out, 'posts')) {
+    if (!p || typeof p !== 'object') continue;
+    const title = clip(plain(str(p.title, 300)), 90);
+    const copy = postCopy(str(p.copy, 4000));
+    if (!title || countWords(copy) < 20) continue;
+    const post = { kind: 'post', title, copy };
+    const idx = Number.isInteger(p.source) ? p.source : Number.isInteger(Number(p.source)) && p.source !== null && p.source !== '' ? Number(p.source) : -1;
+    const r = idx >= 0 && idx < results.length ? results[idx] : null;
+    if (r && !used.has(idx) && httpUrl(r.url)) {
+      used.add(idx);
+      post.sourceUrl = httpUrl(r.url);
+      const t = clip(plain(str(p.topic, 80)), 40) || clip(r.title, 40);
+      post.sourceLabel = `${siteLabel(r.url)} · ${t}`;
+    }
+    const visualIdea = clip(plain(str(p.visualIdea, 400)), 220);
+    if (visualIdea) post.visualIdea = visualIdea;
+    posts.push(post);
+    if (posts.length >= n) break;
+  }
+  if (!posts.length) throw err('', 'You.com did not return usable posts. Try again.');
+  return posts;
+}
+
+// ============================================================== DMs
+
+function threadContext(r) {
+  try {
+    const u = new URL(r.url);
+    const h = u.hostname.replace(/^www\./, '');
+    const sub = /\/r\/([A-Za-z0-9_]+)/.exec(u.pathname);
+    const user = /\/(?:u|user)\/([A-Za-z0-9_-]+)/.exec(u.pathname);
+    if (/reddit\.com$/.test(h)) return { label: sub ? `Reddit · r/${sub[1]}` : 'Reddit', sub: sub ? sub[1] : '', user: user ? user[1] : '' };
+    if (h === 'x.com' || h === 'twitter.com') {
+      const handle = /^\/([A-Za-z0-9_]{1,15})(?:\/|$)/.exec(u.pathname);
+      return { label: 'X', sub: '', user: handle && !['search', 'i', 'home'].includes(handle[1]) ? `@${handle[1]}` : '' };
+    }
+    if (h === 'linkedin.com' || h.endsWith('.linkedin.com')) return { label: 'LinkedIn', sub: '', user: '' };
+    if (h === 'news.ycombinator.com') return { label: 'Hacker News', sub: '', user: '' };
+    if (h === 'indiehackers.com' || h.endsWith('.indiehackers.com')) return { label: 'Indie Hackers', sub: '', user: '' };
+    return { label: h, sub: '', user: '' };
+  } catch {
+    return { label: 'Source', sub: '', user: '' };
+  }
+}
+
+/** DM drafts to people who publicly described the problem the product solves. */
+export async function findDMs({ brand, count = 2 } = {}) {
+  const b = normBrand(brand);
+  const n = Math.max(1, Math.min(5, Number(count) || 2));
+  const topic = topicOf(b);
+  const lists = await settledSearches([
+    [`${topic} frustrating problem`, { count: 10, freshness: 'month', includeDomains: COMMUNITY_DOMAINS }],
+    [`${topic} looking for a better way recommendation`, { count: 10, freshness: 'month', includeDomains: COMMUNITY_DOMAINS }],
+  ]);
+  const results = mergeResults(lists, hostOf(b.url))
+    .filter((r) => COMMUNITY_DOMAINS.some((d) => hostOf(r.url) === d || hostOf(r.url).endsWith(`.${d}`)))
+    .slice(0, 16);
+  if (!results.length) return [];
+
+  const system = `You help a founder do respectful, one-to-one outreach. From recent public community posts, pick the ones where a real person describes the problem the founder's product solves (a frustration, a struggle, or asking for a tool or a better way). Skip news articles, company pages, ads, job posts and anything not written by a person with that problem.
+
+For each pick write a short direct message from the founder:
+- max 70 words, plain text, no markdown, no emoji, no hashtags.
+- reference the person's specific words or situation from the snippet.
+- disclose the affiliation plainly (e.g. "I'm building <company>").
+- no hard sell, no links, no pricing; offer help or ask a question.
+- ask permission (e.g. "Would it be OK if I shared what we're building?").
+Never invent details about the person beyond the snippet.
+
+"title" is short context, like "u/handle on r/sub" or the thread title (max 70 characters). "recipient" is the person's handle or name only if it is visible in the URL, title or snippet, else "".`;
+
+  const prompt = `Brand brief:
+${brandBrief(b)}
+
+Recent community posts:
+${resultsBlock(results)}
+
+Pick up to ${n} of the strongest and write a DM for each. If none fit, return [].`;
+
+  const out = await you.json({
+    system,
+    prompt,
+    shape: '[{"source": integer, "title": string, "recipient": string, "copy": string}]',
+    maxTokens: 2000,
+    temperature: 0.5,
+  });
+
+  const used = new Set();
+  const dms = [];
+  for (const d of asArray(out, 'dms')) {
+    if (!d || typeof d !== 'object') continue;
+    const idx = Number(d.source);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= results.length || used.has(idx)) continue;
+    const r = results[idx];
+    const sourceUrl = httpUrl(r.url);
+    const copy = clampWords(plain(str(d.copy, 1500)), 70);
+    if (!sourceUrl || countWords(copy) < 8) continue;
+    used.add(idx);
+    const ctx = threadContext(r);
+    let recipient = clip(plain(str(d.recipient, 80)), 60);
+    if (!recipient && ctx.user) recipient = ctx.sub && !ctx.user.startsWith('@') ? `u/${ctx.user}` : ctx.user;
+    let title = clip(plain(str(d.title, 200)), 70);
+    if (!title) title = recipient && ctx.sub ? `${recipient} on r/${ctx.sub}` : clip(r.title, 70);
+    const dm = { kind: 'dm', title, copy, sourceUrl, sourceLabel: ctx.label };
+    if (recipient) dm.recipient = recipient;
+    dms.push(dm);
+    if (dms.length >= n) break;
+  }
+  return dms;
+}
+
+// ============================================================== revise
+
+/** Apply a revision request to a post or DM → { title?, copy, message }. */
+export async function revise({ brand, item, request } = {}) {
+  const b = normBrand(brand);
+  const it = item && typeof item === 'object' ? item : {};
+  const isDm = it.kind === 'dm';
+  const ask = str(request, 1000);
+  if (!ask) throw err('', 'Say what to change.');
+  const copyIn = str(it.copy, 4000);
+  if (!copyIn) throw err('', 'There is nothing to revise yet.');
+
+  const system = isDm
+    ? `You revise a founder's direct message to someone who publicly described a problem. Apply the requested change. Keep it max 70 words, plain text, no markdown, no emoji, no links. Keep the plain disclosure of the founder's affiliation, keep references to the person's situation, no hard sell, and keep asking permission. Never invent facts.`
+    : `You revise a founder's LinkedIn post in their brand voice. Apply the requested change and keep everything else. Unless the request says otherwise: title is a hook headline (max 90 characters); copy is 80–180 words in short paragraphs, at most 3 hashtags at the end, no markdown, and ends with a question. Never invent facts, numbers or quotes that are not already in the post or the brand brief.`;
+  const prompt = `Brand brief:
+${brandBrief(b)}
+
+Current ${isDm ? 'message' : 'post'}:
+${isDm ? '' : `Title: ${str(it.title, 300)}\n`}${isDm ? `Context: ${str(it.title, 200)}\n` : ''}Copy:
+${copyIn}
+
+Requested change: ${ask}
+
+Return the revised ${isDm ? 'message' : 'post'} and "message": one short plain sentence (max 15 words) telling the founder what you changed.`;
+
+  const out = await you.json({
+    system,
+    prompt,
+    shape: isDm ? '{"copy": string, "message": string}' : '{"title": string, "copy": string, "message": string}',
+    maxTokens: 1500,
+    temperature: 0.6,
+  });
+  const copy = isDm ? clampWords(plain(str(out.copy, 2000)), 70) : postCopy(str(out.copy, 4000));
+  if (!copy) throw err('', 'You.com did not return a revision. Try again.');
+  const result = { copy, message: clip(plain(str(out.message, 300)), 140) || (isDm ? 'Updated the message.' : 'Updated the post.') };
+  if (!isDm) {
+    const title = clip(plain(str(out.title, 300)), 90);
+    if (title) result.title = title;
+  }
+  return result;
+}
+
+// ============================================================== brainstorm
+
+/** Idea chat → { reply, proposal?: { title, copy } }. messages: [{ role:'agent'|'user', text }]. */
+export async function brainstorm({ brand, messages, proposal } = {}) {
+  const b = normBrand(brand);
+  const list = (Array.isArray(messages) ? messages : [])
+    .filter((m) => m && typeof m.text === 'string' && m.text.trim())
+    .map((m) => ({ role: m.role === 'agent' ? 'assistant' : 'user', content: m.text.trim().slice(0, 2000) }));
+  if (!list.some((m) => m.role === 'user')) throw err('', 'Type an idea first.');
+  const current = proposal && typeof proposal === 'object' && str(proposal.copy) ? { title: str(proposal.title, 300), copy: str(proposal.copy, 4000) } : null;
+
+  const system = `You are Lens, helping a founder brainstorm LinkedIn posts.
+${brandBrief(b)}
+
+Reply to the founder's latest message in max 60 words, plain text, friendly, no markdown, no emoji.
+When there is a post idea in the conversation, include "proposal": a full draft with "title" (hook headline, max 90 characters) and "copy" (80–180 words, short paragraphs, at most 3 hashtags at the end, ends with a question, in the brand voice).
+${current ? `There is a current proposal:\nTitle: ${current.title}\nCopy:\n${current.copy}\nIf the founder asks to change it, return the full refined proposal (apply the change, keep the rest). If they move to a new idea, return a new proposal.` : 'There is no proposal yet.'}
+If the founder is only asking a question or chatting, set "proposal" to null.
+Never invent facts, numbers or quotes about the company beyond the brief and what the founder said.
+
+Respond with JSON only, shaped {"reply": string, "proposal": {"title": string, "copy": string} | null}.`;
+
+  const send = async (extra = []) => you.chat({ system, messages: [...list.slice(-20), ...extra], maxTokens: 1600, temperature: 0.7 });
+  const first = await send();
+  let parsed;
+  try {
+    parsed = you.extractJson(first, '{');
+  } catch (e) {
+    try {
+      parsed = you.extractJson(await send([
+        { role: 'assistant', content: first.slice(0, 3000) },
+        { role: 'user', content: `That was not valid JSON (${e.message}). Reply again with only the JSON object.` },
+      ]), '{');
+    } catch {
+      // A plain-text answer is still a usable reply.
+      const reply = clampWords(plain(first), 60);
+      if (!reply) throw err('', 'You.com did not return a usable answer. Try again.');
+      return { reply };
+    }
+  }
+  const reply = clampWords(plain(str(parsed.reply, 1500)), 60);
+  const result = { reply: reply || 'Here’s a draft.' };
+  const p = parsed.proposal;
+  if (p && typeof p === 'object') {
+    const title = clip(plain(str(p.title, 300)), 90);
+    const copy = postCopy(str(p.copy, 4000));
+    if (title && copy) result.proposal = { title, copy };
+  }
+  return result;
+}
+
+// ============================================================== visuals (MCP)
+
+function requireConnected(provider) {
+  const key = MCP_KEYS[provider];
+  if (mcp.getConnection(key).status !== 'connected') throw err('not-connected', `Connect ${provider} in Settings first.`);
+  return key;
+}
+
+// ---- Sculptex
 
 const GEN_RE = /generat|create|model|part|render|design|make|build|sculpt/;
 const MEDIA_RE = /\.(png|jpe?g|webp|gif|svg)(\?|#|$)/i;
@@ -1174,8 +999,7 @@ function buildArgs(tool, prompt) {
 function collectUrls(value, out, depth = 0) {
   if (depth > 6 || value == null) return;
   if (typeof value === 'string') {
-    const found = value.match(/https?:\/\/[^\s"'<>)\]]+/g) || [];
-    for (const u of found) out.add(u.replace(/[.,;:]+$/, ''));
+    for (const u of value.match(/https?:\/\/[^\s"'<>)\]]+/g) || []) out.add(u.replace(/[.,;:]+$/, ''));
     if (/^data:(image|model)\//.test(value)) out.add(value);
     return;
   }
@@ -1197,7 +1021,8 @@ function extractRender(result) {
       if (!renderUrl) renderUrl = `data:${item.mimeType || 'image/png'};base64,${item.data}`;
     } else if (item.type === 'text' && item.text) {
       texts.push(item.text);
-      const parsed = (() => { try { return JSON.parse(item.text); } catch { return null; } })();
+      let parsed = null;
+      try { parsed = JSON.parse(item.text); } catch { parsed = null; }
       collectUrls(parsed || item.text, urls);
     } else if (item.type === 'resource_link' && item.uri) {
       urls.add(item.uri);
@@ -1222,636 +1047,104 @@ function extractRender(result) {
   return { renderUrl, modelUrl, text: texts.join('\n\n').trim() };
 }
 
-function demoRender(prompt, extra = {}) {
-  const r = demo?.sculptexDemoRender;
-  const base = typeof r === 'string' ? { renderUrl: r } : { ...(r || {}) };
-  return {
-    renderUrl: base.renderUrl || base.src || '',
-    modelUrl: base.modelUrl || '',
-    text: base.text || `Demo render (sample). Connect Sculptex to render: "${clip(prompt, 120)}"`,
-    toolName: 'demo',
-    raw: null,
-    demo: true,
-    ...extra,
-  };
-}
-
-export async function renderWithSculptex({ prompt } = {}) {
-  const p = String(prompt || '').trim() || demo?.sculptexDemoPrompt || 'a simple L-bracket with two mounting holes';
-  return withLoading('sculptex', async () => {
-    const conn = getState().connections?.sculptex || {};
-    if (conn.status !== 'connected') {
-      await delay();
-      return demoRender(p);
-    }
-    try {
-      let tools = Array.isArray(conn.tools) && conn.tools.length ? conn.tools : await mcp.listTools('sculptex');
-      let tool = pickGenerationTool(tools);
-      if (!tool) {
-        tools = await mcp.listTools('sculptex');
-        tool = pickGenerationTool(tools) || mcp.pickTool('sculptex', ['generate', 'create', 'model', 'part', 'render', 'design']);
-      }
-      if (!tool) throw new Error('Sculptex has no tool that generates models.');
-      const args = buildArgs(tool, p);
-      const raw = await mcp.callTool('sculptex', tool.name, args);
-      const { renderUrl, modelUrl, text } = extractRender(raw);
-      if (!renderUrl && !modelUrl && !text) throw new Error(`Sculptex "${tool.name}" returned nothing to show.`);
-      return { renderUrl, modelUrl, text, toolName: tool.name, raw, demo: false };
-    } catch (e) {
-      console.warn('[Lens] Sculptex render failed', e);
-      toast(`Sculptex render failed: ${e.message || e} — showing the sample render.`, 'error');
-      return demoRender(p, { error: e.message || String(e) });
-    }
-  });
-}
-
-// ============================================================== product analysis
-
-function profileFromText(url, title, text, c0) {
-  const host = hostOf(url);
-  const name = titleCase((host.split('.')[0] || 'Product').replace(/[-_]+/g, ' ')).split(' ')[0];
-  const cleanTitle = String(title || '').split(/[|–—-]/)[0].trim();
-  const desc = clip(sentences(text).slice(0, 2).join(' '), 300);
-  const freq = new Map();
-  for (const w of words(`${title} ${text}`)) {
-    if (w.length < 4 || STOP_WORDS.has(w) || /^\d+$/.test(w)) continue;
-    freq.set(w, (freq.get(w) || 0) + 1);
+async function renderWithSculptex(prompt) {
+  const conn = mcp.getConnection('sculptex');
+  let tools = conn.tools.length ? conn.tools : await mcp.listTools('sculptex');
+  let tool = pickGenerationTool(tools);
+  if (!tool) {
+    tools = await mcp.listTools('sculptex');
+    tool = pickGenerationTool(tools) || mcp.pickTool('sculptex', ['generate', 'create', 'model', 'part', 'render', 'design']);
   }
-  const keywords = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([w]) => w);
-  return {
-    name: cleanTitle && cleanTitle.length < 30 ? cleanTitle : name,
-    url,
-    tagline: clip(String(title || '').split(/[|–—-]/).slice(1).join(' ').trim() || sentences(text)[0] || '', 110),
-    description: desc,
-    field: c0.field || '',
-    keywords,
-    competitors: [],
-    audience: '',
-  };
-}
-
-export async function analyzeProduct(url) {
-  const target = normalizeUrl(url);
-  if (!target) throw new Error('Enter your product URL first.');
-  return withLoading('analyze', async () => {
-    await warm();
-    const base = demo?.company || {};
-    const sameAsDemo = hostOf(target) && hostOf(target) === hostOf(base.url);
-    let profile = null;
-
-    if (canUseYou() || canUseAI()) {
-      try {
-        let pageText = '';
-        let pageTitle = '';
-        if (canUseYou()) {
-          const [extracted, searched] = await Promise.allSettled([
-            you.contents([target]),
-            you.search(`${hostOf(target)} product`, { count: 6, siteFilters: [hostOf(target)] }),
-          ]);
-          const page = extracted.status === 'fulfilled' ? extracted.value[0] : null;
-          if (page?.markdown) {
-            pageText = page.markdown.slice(0, 7000);
-            pageTitle = page.title;
-          }
-          if (searched.status === 'fulfilled' && searched.value.length) {
-            pageTitle = pageTitle || searched.value[0].title;
-            pageText += `\n\n${searched.value.map((r) => `${r.title}: ${r.snippet}`).join('\n')}`;
-          }
-          if (!pageText.trim() && !canUseAI()) {
-            throw (extracted.status === 'rejected' ? extracted.reason : null)
-              || (searched.status === 'rejected' ? searched.reason : null)
-              || new Error('Could not read that page.');
-          }
-        }
-        if (canUseAI()) {
-          const out = await ai.json({
-            system: 'You analyze a startup product from its website so a founder-marketing tool can find its future users. Be specific and concrete; do not invent features.',
-            prompt: `Product URL: ${target}
-${pageText.trim() ? `Website content:\n${pageText.slice(0, 8000)}` : 'No page content could be fetched — infer cautiously from the URL and say less rather than invent.'}
-
-Return:
-- name, tagline (≤ 10 words), description (2 sentences, plain language)
-- field (e.g. "3D printing / CAD"), audience (who has the problem, 1 sentence)
-- keywords: 6-10 phrases real users would write when describing the PROBLEM (not marketing words)
-- competitors: 3-6 tools or workarounds people use today
-- voice: a short description of a fitting founder voice`,
-            schemaHint: '{"name":"","tagline":"","description":"","field":"","audience":"","keywords":[""],"competitors":[""],"voice":""}',
-            maxTokens: 1200,
-          });
-          if (!out || typeof out !== 'object' || Array.isArray(out)) throw new Error(`${aiName()} returned an unexpected profile.`);
-          profile = {
-            name: String(out.name || '').trim(),
-            url: target,
-            tagline: String(out.tagline || '').trim(),
-            description: String(out.description || '').trim(),
-            field: String(out.field || '').trim(),
-            audience: String(out.audience || '').trim(),
-            keywords: (Array.isArray(out.keywords) ? out.keywords : []).map(String).filter(Boolean).slice(0, 12),
-            competitors: (Array.isArray(out.competitors) ? out.competitors : []).map(String).filter(Boolean).slice(0, 8),
-            voice: String(out.voice || '').trim(),
-          };
-        } else {
-          profile = profileFromText(target, pageTitle, pageText, company());
-        }
-      } catch (e) {
-        fallbackToast('Analyzing your site', e);
-        profile = null;
-      }
-    }
-
-    if (!profile) {
-      await delay(600, 900);
-      if (sameAsDemo) {
-        profile = { ...clone(base), url: target };
-      } else {
-        const host = hostOf(target);
-        const name = titleCase((host.split('.')[0] || 'Your product').replace(/[-_]+/g, ' '));
-        profile = { ...clone(base), name, url: target };
-        toast('Demo mode: showing the sample profile. Add a You.com key in Settings (and turn off demo mode) to analyze your site.', 'info');
-      }
-    }
-
-    const current = getState().company || {};
-    const merged = { ...current };
-    for (const [k, v] of Object.entries(profile)) {
-      if (Array.isArray(v) ? v.length : v) merged[k] = v;
-    }
-    setState({ company: merged });
-    return profile;
-  });
-}
-
-// ============================================================== chat
-
-function groundingContext() {
-  const s = getState();
-  const c = company();
-  const threads = (s.threads || [])
-    .filter((t) => t.status !== 'dismissed')
-    .slice()
-    .sort((a, b) => (b.relevance || 0) - (a.relevance || 0))
-    .slice(0, 8);
-  const drafts = s.drafts || [];
-  const byStatus = drafts.reduce((m, d) => ({ ...m, [d.status]: (m[d.status] || 0) + 1 }), {});
-  const pending = drafts.filter((d) => d.status === 'pending').slice(0, 5);
-  const scheduled = drafts.filter((d) => d.status === 'scheduled').slice(0, 5);
-  return `## Company
-${companyBrief(c)}
-
-## Top conversations (by relevance)
-${threads.map((t, i) => `${i + 1}. [${t.id}] ${t.community || t.source} · relevance ${t.relevance} · intent ${t.intent} · status ${t.status} · pain "${t.painPoint}"
-   "${clip(t.title, 120)}" — quote: "${clip(t.quote, 200)}"${t.author ? ` — by ${t.author}` : ''}
-   ${t.url}`).join('\n') || 'None yet.'}
-
-## Trending in the field
-${(s.trends || []).slice(0, 6).map((t) => `- ${t.title} (${t.tag || t.source}, ${fmtWhen(t.publishedAt)}): ${clip(t.summary, 160)}`).join('\n') || 'None loaded.'}
-
-## Founder events
-${(s.events || []).slice(0, 6).map((e) => `- ${e.title} — ${fmtWhen(e.start)}, ${e.location || e.format}${e.host ? `, by ${e.host}` : ''}. ${clip(e.why, 140)} ${e.url || ''}`).join('\n') || 'None loaded.'}
-
-## Drafts
-Counts: ${Object.entries(byStatus).map(([k, v]) => `${k} ${v}`).join(', ') || 'none'}
-${pending.map((d) => `- pending ${d.kind}: "${clip(d.body, 100)}"`).join('\n')}
-${scheduled.map((d) => `- scheduled ${d.kind} for ${fmtWhen(d.scheduledFor)}: "${clip(d.title || d.body, 80)}"`).join('\n')}`;
-}
-
-function chatSystem() {
-  return `You are Lens, an assistant that helps a startup founder build a following and find early users.
-Today is ${new Date().toDateString()}.
-Ground every answer in the data below — name specific conversations (with their community and a short quote), pain points, events and drafts. If the data doesn't cover something, say so briefly.
-Be concise and actionable: short paragraphs or a short list, then one clear next step inside Lens (Discover, Outreach, Studio, Schedule).
-Lens never sends or posts anything without the founder approving it. LinkedIn in Lens is a demo integration.
-Encourage helpful, non-spammy outreach with honest founder disclosure.
-
-${groundingContext()}`;
-}
-
-export async function chat(message) {
-  const text = String(message || '').trim();
-  if (!text) return '';
-  setState((s) => ({ chat: [...(s.chat || []), { role: 'user', content: text, at: nowIso() }] }));
-  return withLoading('chat', async () => {
-    await warm();
-    let reply = '';
-    let failed = false;
-    if (canChatLive()) {
-      try {
-        const history = (getState().chat || []).filter((m) => !m.error).slice(-16).map((m) => ({ role: m.role, content: m.content }));
-        reply = await ai.complete({ system: chatSystem(), messages: history, maxTokens: 900, provider: 'you' });
-        if (!String(reply || '').trim()) throw new Error('empty reply');
-      } catch (e) {
-        console.warn('[Lens] chat failed', e);
-        reply = chatUnavailable(e);
-        failed = true;
-      }
-    } else {
-      reply = chatUnavailable(null);
-      failed = true;
-    }
-    setState((s) => ({ chat: [...(s.chat || []), { role: 'assistant', content: reply, at: nowIso(), ...(failed ? { error: true } : {}) }] }));
-    return reply;
-  });
-}
-
-// ============================================================== v2: onboarding chat
-
-function onboardingState() {
-  const o = getState().onboarding || {};
-  return { ...o, step: o.step || 'url', url: o.url || '', transcript: Array.isArray(o.transcript) ? o.transcript : [], profileDraft: o.profileDraft || {} };
-}
-
-function patchOnboarding(patch) {
-  setState((s) => ({ onboarding: { ...onboardingState(), ...(s.onboarding || {}), ...patch } }));
-}
-
-function mergeProfile(prev, next) {
-  const out = { ...(prev || {}) };
-  for (const [k, v] of Object.entries(next || {})) {
-    if (Array.isArray(v)) {
-      const clean = v.map((x) => String(x).trim()).filter(Boolean);
-      if (clean.length) out[k] = [...new Set(clean)];
-    } else if (typeof v === 'string' && v.trim()) {
-      out[k] = v.trim();
-    }
+  if (!tool) throw err('', 'Sculptex has no tool that renders models.');
+  const raw = await mcp.callTool('sculptex', tool.name, buildArgs(tool, prompt));
+  const { renderUrl, modelUrl, text } = extractRender(raw);
+  const src = /^data:image\//i.test(renderUrl) || /^https:\/\//i.test(renderUrl) ? renderUrl : '';
+  if (!src) {
+    throw err('', modelUrl ? 'Sculptex made a model but no preview image.' : `Sculptex returned no image${text ? `: ${clip(text, 160)}` : '.'}`);
   }
+  // Keep a LinkedIn-ready copy (PNG/JPEG/GIF, capped size); a webp or oversized render is re-encoded here.
+  const out = { src: (await postableImage(src)) || src, provider: 'Sculptex' };
+  if (/^https:\/\//i.test(modelUrl)) out.link = modelUrl;
   return out;
 }
 
+// ---- images: LinkedIn takes PNG, JPEG or GIF; links from Canva expire (export ≈ 24 h, thumbnail ≈ 15 min)
 
-const SKIP_HINT = '\n\nYou can also press "Skip — use what Lens found" below to continue with a profile built from the scan.';
+const POSTABLE_IMAGE = /^data:image\/(png|jpe?g|gif);base64,/i;
+const MAX_STORED_IMAGE_CHARS = 1000000; // the post is saved in localStorage (~5 MB for everything)
+const MAX_IMAGE_SIDE = 1600;
 
-export async function onboardingChat(message) {
-  const text = String(message || '').trim();
-  const c = company();
-  const ob = onboardingState();
-  if (!text && !ob.transcript.length) {
-    const runUrl = ob.url;
-    return withLoading('onboarding', async () => {
-      await warm();
-      let opener = '';
-      let failed = false;
-      let failedErr = null;
-      if (canChatLive()) {
-        try {
-          opener = await ai.complete({
-            system: 'You are Lens, an AI that helps startup founders find their audience. You are starting an onboarding chat. In ≤ 60 words: say in one sentence what you understood the product does (from the website brief), then ask ONE question — who is it for (the person who feels the problem most: role and what they are trying to get done). Friendly, plain text only — no markdown, bullet points or headings.',
-            prompt: `Website brief:\n${companyBrief(c)}`,
-            maxTokens: 400,
-            provider: 'you',
-          });
-          if (!String(opener || '').trim()) throw new Error('empty reply');
-          opener = opener.trim();
-        } catch (e) {
-          console.warn('[Lens] onboarding opener failed', e);
-          failedErr = e;
-          failed = true;
-        }
-      } else {
-        failed = true;
-      }
-      if (failed) opener = chatUnavailable(failedErr, { plain: true }) + SKIP_HINT;
-      const cur = onboardingState();
-      // Only land in the run that asked for it (the founder may have gone Back and entered another URL).
-      if (cur.url === runUrl && !cur.transcript.length) patchOnboarding({ transcript: [{ role: 'assistant', content: opener, at: nowIso(), ...(failed ? { error: true } : {}) }] });
-      return { reply: opener, ready: false, profile: ob.profileDraft };
-    });
-  }
-  if (!text) return { reply: '', ready: false, profile: ob.profileDraft };
-
-  const transcript = [...ob.transcript, { role: 'user', content: text, at: nowIso() }];
-  patchOnboarding({ transcript });
-
-  return withLoading('onboarding', async () => {
-    await warm();
-    let turn = null;
-    // Every typed message goes to You.com (skip/done included — the prompt handles those).
-    // The deterministic shortcut is the "Skip — use what Lens found" button in start.js.
-    if (!canChatLive()) {
-      turn = { reply: chatUnavailable(null, { plain: true }) + SKIP_HINT, ready: false, profile: {}, error: true };
-    } else {
-      try {
-        const userCount = transcript.filter((m) => m.role === 'user').length;
-        const out = await ai.json({
-          system: `You are Lens, onboarding a startup founder. Learn their target audience, the audience's pains (in the audience's own words), where they hang out online, and the founder's voice — in at most 4 questions, ONE question per reply, friendly and brief (≤ 60 words). Build on what the founder already said; never repeat a question. Set ready=true once you know audience, pains and channels (or the founder says skip/done, or after the 4th answer). When ready, the reply summarizes the profile in one or two sentences and asks for nothing. Write plain text only — no markdown, no lists.`,
-          prompt: `What Lens learned from the website:
-${companyBrief(c)}
-
-Profile so far: ${JSON.stringify(ob.profileDraft)}
-Founder answers so far: ${userCount}
-
-Conversation:
-${transcript.filter((m) => !m.error).map((m) => `${m.role === 'user' ? 'Founder' : 'Lens'}: ${m.content}`).join('\n')}`,
-          schemaHint: '{"reply":"","ready":false,"profile":{"audience":"","pains":[""],"channels":[""],"keywords":[""],"voice":""}}',
-          maxTokens: 900,
-          provider: 'you',
-        });
-        if (out && typeof out.reply === 'string' && out.reply.trim()) {
-          turn = { reply: out.reply.trim(), ready: Boolean(out.ready) || userCount >= 5, profile: out.profile && typeof out.profile === 'object' ? out.profile : {} };
-        } else {
-          throw new Error('empty reply');
-        }
-      } catch (e) {
-        console.warn('[Lens] onboarding chat failed', e);
-        turn = { reply: chatUnavailable(e, { plain: true }) + SKIP_HINT, ready: false, profile: {}, error: true };
-      }
-    }
-    const profile = mergeProfile(ob.profileDraft, turn.profile);
-    // The founder may have gone Back and started another URL while You.com was answering.
-    if ((getState().onboarding || {}).url !== ob.url) return { reply: turn.reply, ready: false, profile: ob.profileDraft, stale: true };
-    setState((s) => ({
-      onboarding: {
-        ...onboardingState(),
-        ...(s.onboarding || {}),
-        transcript: [...transcript, { role: 'assistant', content: turn.reply, at: nowIso(), ...(turn.error ? { error: true } : {}) }],
-        profileDraft: profile,
-      },
-    }));
-    return { reply: turn.reply, ready: turn.ready, profile };
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('read failed'));
+    reader.readAsDataURL(blob);
   });
 }
 
-// ============================================================== v2: suggestions (swipe stack)
-
-function nextFreeSlot(excludeId) {
-  const used = new Set(
-    (getState().drafts || [])
-      .filter((d) => d.status === 'scheduled' && d.scheduledFor && d.id !== excludeId)
-      .map((d) => Math.round(Date.parse(d.scheduledFor) / 60000)),
-  );
-  const minTime = Date.now() + 5 * 60000;
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const candidates = [];
-  for (let day = 0; day < 56; day++) {
-    const d = new Date(start.getTime());
-    d.setDate(start.getDate() + day);
-    for (const slot of BEST_SLOTS) {
-      if (d.getDay() !== slot.dow) continue;
-      const at = new Date(d.getTime());
-      at.setHours(slot.h, slot.m, 0, 0);
-      if (at.getTime() > minTime) candidates.push(at);
+/** An image (https or data:) as a lasting PNG/JPEG/GIF data URL, or '' when it cannot be read from this page. */
+async function postableImage(src, timeout = 15000) {
+  const value = String(src || '');
+  if (POSTABLE_IMAGE.test(value) && value.length <= MAX_STORED_IMAGE_CHARS) return value;
+  if (!/^(https:|data:image\/)/i.test(value)) return '';
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    let blob;
+    try {
+      const res = await fetch(value, { signal: controller.signal, credentials: 'omit', cache: 'no-store' });
+      if (!res.ok) return '';
+      blob = await res.blob();
+    } finally {
+      clearTimeout(timer);
     }
+    if (blob.type && !/^image\//i.test(blob.type)) return '';
+    if (/^image\/(png|jpe?g|gif)$/i.test(blob.type) && blob.size * 1.37 + 40 <= MAX_STORED_IMAGE_CHARS) return await blobToDataUrl(blob);
+    const bitmap = await createImageBitmap(blob);
+    const scale = Math.min(1, MAX_IMAGE_SIDE / Math.max(bitmap.width, bitmap.height, 1));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    if (bitmap.close) bitmap.close();
+    for (const quality of [0.88, 0.75, 0.6]) {
+      const url = canvas.toDataURL('image/jpeg', quality);
+      if (POSTABLE_IMAGE.test(url) && url.length <= MAX_STORED_IMAGE_CHARS) return url;
+    }
+    return '';
+  } catch {
+    return ''; // e.g. the image host does not allow cross-origin reads
   }
-  candidates.sort((a, b) => a - b);
-  const free = candidates.find((at) => !used.has(Math.round(at.getTime() / 60000)));
-  if (free) return free.toISOString();
-  const fallback = new Date(Date.now() + 86400000);
-  fallback.setMinutes(0, 0, 0);
-  return fallback.toISOString();
 }
 
-function demoTrendPost(t, clusters, c, variant = 0) {
-  const top = (clusters || [])[variant % Math.max(1, (clusters || []).length)];
-  return {
-    title: '',
-    body: `${variant > 0 ? 'Still thinking about this one: ' : ''}${clip(t.title, 120)}\n\n${t.summary || ''}\n\nWhat I find interesting is what this means for people dealing with ${top ? top.painPoint.toLowerCase() : 'this problem'} every day.${top?.example ? ` One person put it like this: "${clip(top.example, 160)}"` : ''}\n\nI'm building ${c.name}${c.tagline ? ` — ${c.tagline.replace(/\.$/, '').toLowerCase()}` : ''}, so I watch this space closely. My bet: the tools that win will be the ones that remove a step, not add a feature.\n\nWhat's your read on it — does this change anything for how you work?`,
-    visualIdea: `A simple chart or render that illustrates "${clip(t.title, 60)}"`,
-    sculptexPrompt: demo?.sculptexDemoPrompt || '',
-  };
-}
+// ---- Canva (tools resolved from tools/list; Canva's documented names first, then a fuzzy match)
 
-export async function generateSuggestions({ count = 5 } = {}) {
-  return withLoading('suggestions', async () => {
-    await warm();
-    const c = company();
-    const threads = getState().threads || [];
-    const clusters = await clusterPainPoints();
-    const trends = (getState().trends || []).slice(0, 3);
-    const n = Math.max(1, Math.min(10, Number(count) || 5));
-    const trendSlots = trends.length ? Math.min(trends.length, Math.max(1, Math.round(n / 4))) : 0;
-    const sources = [
-      ...clusters.slice(0, n - trendSlots).map((cl) => ({ type: 'pain', label: cl.painPoint, threadIds: cl.threadIds.slice(0, 6), cluster: cl })),
-      ...trends.slice(0, trendSlots).map((t) => ({ type: 'trend', label: t.title, threadIds: [], trend: t })),
-    ];
-    while (sources.length < n && clusters.length) {
-      const cl = clusters[sources.length % clusters.length];
-      sources.push({ type: 'pain', label: cl.painPoint, threadIds: cl.threadIds.slice(0, 6), cluster: cl, alt: true });
-    }
-    if (!sources.length) sources.push({ type: 'pain', label: c.keywords?.[0] ? titleCase(c.keywords[0]) : 'What we keep hearing', threadIds: [] });
-    const final = sources.slice(0, n);
-
-    let posts = null;
-    if (canUseAI()) {
-      try {
-        const brief = final.map((src, i) => {
-          if (src.type === 'trend') return `${i}. TREND: ${src.trend.title} — ${clip(src.trend.summary, 200)}`;
-          const qs = src.threadIds.map((id) => threads.find((t) => t.id === id)).filter(Boolean).slice(0, 3).map((t) => `"${clip(t.quote || t.snippet, 180)}" (${t.community})`);
-          return `${i}. PAIN POINT: ${src.label} (${src.cluster?.count || qs.length} conversations)${src.alt ? ' — use a different angle than any earlier post on this pain point' : ''}\n   ${qs.join('\n   ')}`;
-        }).join('\n');
-        const out = await ai.json({
-          system: `You ghostwrite LinkedIn posts for the founder of ${c.name}. Voice: ${c.voice || 'warm, direct, plain language'}.\n${POST_RULES}`,
-          prompt: `${companyBrief(c)}
-
-Write one post for EACH numbered source below (${final.length} posts, same order). For each also give a one-line visual idea and a one-sentence Sculptex prompt describing an exact 3D-printable part that fits the post ("" if none fits).
-
-${brief}`,
-          schemaHint: '[{"i":0,"title":"","body":"","visualIdea":"","sculptexPrompt":""}]',
-          maxTokens: 900 * final.length,
-          effort: 'medium',
-        });
-        const list = Array.isArray(out) ? out : [];
-        posts = final.map((src, i) => {
-          const hit = list.find((x) => x?.i === i) || list[i];
-          const p = hit ? normalizePost(hit, src.label) : null;
-          return p && countWords(p.body) >= 60 ? p : null;
-        });
-        if (!posts.some(Boolean)) posts = null;
-      } catch (e) {
-        fallbackToast(`Generating posts with ${aiName()}`, e);
-      }
-    }
-
-    const fresh = [];
-    const base = Date.now();
-    // How often each topic was already suggested, so "Generate more" takes a new angle instead of repeating itself.
-    const seen = new Map();
-    for (const d of getState().drafts || []) {
-      if (d && d.kind === 'post' && d.source?.label) seen.set(d.source.label, (seen.get(d.source.label) || 0) + 1);
-    }
-    for (let i = 0; i < final.length; i++) {
-      const src = final[i];
-      let p = posts?.[i] || null;
-      if (!p) {
-        const variant = seen.get(src.label) || 0;
-        seen.set(src.label, variant + 1);
-        if (src.type === 'trend') {
-          p = demoTrendPost(src.trend, clusters, c, variant);
-        } else {
-          const related = src.threadIds.map((id) => threads.find((t) => t.id === id)).filter(Boolean);
-          p = demoPost(src.label, related.length ? related : threads, c, variant);
-        }
-      }
-      const at = new Date(base - i * 1000).toISOString();
-      fresh.push({
-        id: uid('d'),
-        kind: 'post',
-        title: p.title,
-        body: p.body,
-        status: 'pending',
-        createdAt: at,
-        updatedAt: at,
-        channel: 'linkedin',
-        painPoint: src.type === 'pain' ? src.label : undefined,
-        source: { type: src.type, label: src.label, threadIds: src.threadIds },
-        visualIdea: p.visualIdea,
-        sculptexPrompt: p.sculptexPrompt,
-      });
-    }
-    if (!posts) await delay();
-    addDrafts(fresh);
-    return fresh;
-  });
-}
-
-export function approveSuggestion(id) {
-  findDraft(id);
-  const slot = nextFreeSlot(id);
-  notifiedDue.delete(id);
-  updateDraft(id, { status: 'scheduled', scheduledFor: slot, error: '' });
-  return slot;
-}
-
-export function declineSuggestion(id) {
-  findDraft(id);
-  return updateDraft(id, { status: 'rejected' });
-}
-
-export function undoSuggestion(id, prevStatus = 'pending') {
-  const d = findDraft(id);
-  const patch = { status: prevStatus || 'pending' };
-  if (patch.status !== 'scheduled' && d.status === 'scheduled') patch.scheduledFor = undefined;
-  return updateDraft(id, patch);
-}
-
-// ============================================================== v2: idea chat
-
-const REFINE_RE = /\b(short|concise|tight|trim|brief|warm|friendl|personal|question|specific|detail|concrete|hook|casual|formal|professional|pitch|salesy|hashtag|refine|tweak|change|edit|rewrite)/i;
-
-function lastProposal(history) {
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role === 'assistant' && history[i].proposal?.body) return { proposal: history[i].proposal, index: i };
-  }
-  return null;
-}
-
-function demoIdeaPost(text, c) {
-  const clusters = (getState().threads || []).filter((t) => t.painPoint);
-  const relatedThread = clusters.find((t) => words(text).some((w) => w.length > 4 && `${t.title} ${t.snippet} ${t.painPoint}`.toLowerCase().includes(w)));
-  const idea = clip(String(text || '').replace(/\s+/g, ' '), 200);
-  const hook = clip(sentences(text)[0] || idea, 90).replace(/[.…]+$/, '');
-  const body = `${hook}.\n\n${idea}${relatedThread ? `\n\nI keep seeing this in conversations — someone on ${relatedThread.community} wrote: "${clip(relatedThread.quote || relatedThread.snippet, 150)}"` : ''}\n\nHere's what I've learned building ${c.name}: the problem is rarely the tool itself — it's the gap between what you have in your head and what the tool makes you do first. Close that gap and people move faster than they expect.\n\nFull disclosure: that gap is exactly what we're working on at ${c.name}.\n\nHave you run into this? What did you do about it?`;
-  return {
-    title: '',
-    body,
-    visualIdea: relatedThread ? `A render of the part that solves "${relatedThread.painPoint}"` : 'A clean product shot or a before/after',
-    sculptexPrompt: demo?.sculptexDemoPrompt || '',
-  };
-}
-
-export async function ideaChat(message) {
-  const text = String(message || '').trim();
-  if (!text) return { reply: '', proposal: null };
-  setState((s) => ({ ideaChat: [...(s.ideaChat || []), { role: 'user', content: text, at: nowIso() }] }));
-  return withLoading('ideaChat', async () => {
-    await warm();
-    const c = company();
-    const history = getState().ideaChat || [];
-    let turn = null;
-    if (!canChatLive()) {
-      turn = { reply: chatUnavailable(null), proposal: null, error: true };
-    } else {
-      try {
-        const out = await ai.json({
-          provider: 'you',
-          system: `You help the founder of ${c.name} turn a rough idea into a LinkedIn post. Ask at most one short clarifying question if the idea is too vague; otherwise propose a full post. Keep replies brief (≤ 50 words).\n${POST_RULES}`,
-          prompt: `${companyBrief(c)}
-
-Recent pain points from real conversations: ${(await clusterPainPoints()).slice(0, 4).map((cl) => `${cl.painPoint} (${cl.count})`).join(', ') || 'none yet'}
-
-Conversation:
-${history.filter((m) => !m.error).slice(-12).map((m) => `${m.role === 'user' ? 'Founder' : 'Lens'}: ${m.content}${m.proposal ? `\n[Proposed post: ${clip(m.proposal.body, 400)}]` : ''}`).join('\n')}
-
-Return the reply and, when you have a post (new or refined), the proposal; else proposal null.`,
-          schemaHint: '{"reply":"","proposal":{"title":"","body":"","visualIdea":"","sculptexPrompt":""}}',
-          maxTokens: 1400,
-          effort: 'medium',
-        });
-        if (out && typeof out.reply === 'string') {
-          const proposal = out.proposal && out.proposal.body ? normalizePost(out.proposal, 'Your idea') : null;
-          turn = { reply: out.reply.trim() || (proposal ? 'Here\'s a draft.' : ''), proposal };
-        }
-        if (!turn || (!turn.reply && !turn.proposal)) throw new Error('empty reply');
-      } catch (e) {
-        console.warn('[Lens] idea chat failed', e);
-        turn = { reply: chatUnavailable(e), proposal: null, error: true };
-      }
-    }
-    setState((s) => ({
-      ideaChat: [...(s.ideaChat || []), { role: 'assistant', content: turn.reply, at: nowIso(), ...(turn.proposal ? { proposal: turn.proposal } : {}), ...(turn.error ? { error: true } : {}) }],
-    }));
-    return turn;
-  });
-}
-
-export function addIdeaToStack(proposal) {
-  const p = normalizePost(proposal || {}, 'Your idea');
-  if (!p.body) throw new Error('That proposal has no text yet.');
-  const at = nowIso();
-  const draft = {
-    id: uid('d'),
-    kind: 'post',
-    title: p.title,
-    body: p.body,
-    status: 'pending',
-    createdAt: at,
-    updatedAt: at,
-    channel: 'linkedin',
-    source: { type: 'idea', label: p.title || clip(p.body.split('\n')[0], 80), threadIds: [] },
-    visualIdea: p.visualIdea,
-    sculptexPrompt: p.sculptexPrompt,
-  };
-  addDrafts([draft]);
-  return draft;
-}
-
-// ============================================================== Canva (REAL MCP, https://mcp.canva.com/mcp)
-// OAuth sign-in only (no API key). Tools are resolved at runtime from tools/list; the names below are Canva's
-// documented names (https://www.canva.dev/docs/mcp/tools/) and are tried first, then a fuzzy intent match.
-
-const CANVA_NOT_CONNECTED = 'Connect Canva in Settings → Connections.';
-const CANVA_INTENT = 'Create or find a social media visual for a LinkedIn post drafted in Lens';
+const CANVA_INTENT = 'Create a social media visual for a LinkedIn post drafted in Lens';
 const CANVA_TOOLS = {
   generate: { names: ['generate-design'], intents: ['generate design', 'design candidates'] },
   fromCandidate: { names: ['create-design-from-candidate'], intents: ['create design from candidate', 'candidate'] },
-  search: { names: ['search-designs', 'list-designs'], intents: ['search designs', 'list designs'] },
   get: { names: ['get-design'], intents: [] },
   export: { names: ['export-design', 'create-design-export-job'], intents: ['export design'] },
   profile: { names: ['get-user-profile', 'get-profile', 'get-current-user', 'get-user', 'whoami', 'me'], intents: [] },
 };
-// generate-design's design_type enum (per Canva/Composio docs) has no LinkedIn type; these are square/landscape social formats.
+// generate-design's design_type enum has no LinkedIn type in every version; these are social formats in preference order.
 const CANVA_TYPE_FALLBACKS = ['linkedin_post', 'instagram_post', 'facebook_post', 'twitter_post', 'poster'];
 
-let lastCanvaJobId = null;
+const isObj = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 
-function canvaConn() {
-  return getState().connections?.canva || {};
-}
-
-function requireCanva() {
-  if (canvaConn().status !== 'connected') throw new Error(CANVA_NOT_CONNECTED);
-}
-
-async function canvaTool(which, { optional = false } = {}) {
+async function canvaTool(which) {
   const spec = CANVA_TOOLS[which];
   let tool = mcp.findTool('canva', spec.names, spec.intents);
   if (!tool) {
     await mcp.listTools('canva');
     tool = mcp.findTool('canva', spec.names, spec.intents);
   }
-  if (!tool && !optional) {
-    throw new Error(`Your Canva connection doesn't offer "${spec.names[0]}". Reconnect Canva in Settings → Connections and try again.`);
-  }
-  return tool || null;
+  if (!tool) throw err('', `Your Canva connection doesn't offer "${spec.names[0]}". Reconnect Canva in Settings and try again.`);
+  return tool;
 }
 
 function schemaProps(tool) {
@@ -1859,7 +1152,6 @@ function schemaProps(tool) {
   return { props: schema.properties || {}, required: Array.isArray(schema.required) ? schema.required : [] };
 }
 
-// Keep only arguments the tool declares (when it declares any), drop empties, and fill other required fields.
 function canvaArgs(tool, values) {
   const { props, required } = schemaProps(tool);
   const names = Object.keys(props);
@@ -1878,12 +1170,10 @@ function mainTextProp(tool, fallback) {
   const { props, required } = schemaProps(tool);
   const names = Object.keys(props);
   if (!names.length) return fallback;
-  const pref = ['query', 'prompt', 'brief', 'description', 'text', 'instructions'];
-  for (const p of pref) if (p in props) return p;
+  for (const p of ['query', 'prompt', 'brief', 'description', 'text', 'instructions']) if (p in props) return p;
   return required.find((n) => isStringProp(props[n]) && !props[n]?.enum && n !== 'user_intent') || fallback;
 }
 
-// Depth-first search across parsed JSON values for the first key in `keys` whose value passes `ok`.
 function findKey(values, keys, ok = (v) => v != null, depth = 0) {
   if (depth > 6 || values == null) return undefined;
   const list = Array.isArray(values) && depth === 0 ? values : [values];
@@ -1900,15 +1190,6 @@ function findKey(values, keys, ok = (v) => v != null, depth = 0) {
     }
   }
   return undefined;
-}
-
-const isObj = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
-
-function toIso(v) {
-  if (v == null || v === '') return '';
-  if (typeof v === 'number') return new Date(v < 1e12 ? v * 1000 : v).toISOString();
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? '' : d.toISOString();
 }
 
 function firstThumb(x) {
@@ -1928,298 +1209,179 @@ function normalizeDesign(d) {
     thumbnailUrl: firstThumb(d),
     editUrl,
     viewUrl: d.urls?.view_url || d.view_url || d.viewUrl || d.url || editUrl,
-    updatedAt: toIso(d.updated_at ?? d.updatedAt ?? d.modified_at),
-    pageCount: Number(d.page_count || d.pageCount) || undefined,
   };
 }
 
-function normalizeCandidate(c, i) {
+function normalizeCandidate(c) {
   if (!isObj(c)) return null;
   const id = c.candidate_id || c.candidateId || c.id || '';
-  if (!id) return null;
-  return { id: String(id), thumbnailUrl: firstThumb(c), title: c.title || `Option ${i + 1}`, url: c.url || '' };
+  return id ? { id: String(id), thumbnailUrl: firstThumb(c) } : null;
 }
 
 function canvaError(prefix, e) {
   const msg = String(e?.message || e || 'unknown error');
-  if (msg === CANVA_NOT_CONNECTED || /sign-in expired|Connect Canva/i.test(msg)) return new Error(msg);
-  if (/license_required/i.test(msg)) return new Error(`${prefix}: this design uses premium Canva elements your plan can't export.`);
-  return new Error(`${prefix}: ${msg.replace(/^Canva:?\s*/, '')}`);
+  if (e?.code === 'not-connected' || /sign-in expired|Connect Canva|Reconnect Canva/i.test(msg)) return e instanceof Error ? e : err('', msg);
+  if (/license_required/i.test(msg)) return err('', `${prefix}: this design uses premium Canva elements your plan can't export.`);
+  return err('', `${prefix}: ${msg.replace(/^Canva:?\s*/, '')}`);
 }
 
-function decodeJwtName(token) {
-  try {
-    const part = String(token || '').split('.')[1];
-    if (!part) return '';
-    const json = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/')));
-    return json.name || json.display_name || json.email || '';
-  } catch {
-    return '';
-  }
-}
-
-let canvaAccountPromise = null;
-
-/** Best-effort: fill connections.canva.account (display name) from a profile tool or the token. Never throws. */
-function fillCanvaAccount() {
-  if (!canvaAccountPromise) canvaAccountPromise = lookupCanvaAccount().finally(() => { canvaAccountPromise = null; });
-  return canvaAccountPromise;
-}
-
-async function lookupCanvaAccount() {
-  try {
-    let account = '';
-    const tool = mcp.findTool('canva', CANVA_TOOLS.profile.names);
-    if (tool) {
-      const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, canvaArgs(tool, {})));
-      account = findKey(parsed.json, ['display_name', 'displayName', 'name', 'email'], (v) => typeof v === 'string' && v.trim()) || '';
-    }
-    if (!account) account = decodeJwtName(canvaConn().auth?.accessToken);
-    if (account) patchConnection('canva', { account: String(account).trim() });
-  } catch (e) {
-    console.warn('[Lens] Canva profile lookup failed', e);
-  }
-}
-
-mcp.onConnected((key) => (key === 'canva' ? fillCanvaAccount() : null));
-
-/**
- * Connect Canva (real MCP). May redirect the page to Canva's sign-in; on return app.js's
- * handleOAuthCallback finishes the connection. → connection object ({ redirecting: true } while redirecting).
- */
-export async function connectCanva() {
-  const conn = await mcp.connect('canva');
-  if (conn?.redirecting) return conn;
-  if (conn?.status === 'connected') {
-    await fillCanvaAccount();
-    toast(`Canva connected · ${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`, 'success');
-  }
-  return mcp.getConnection('canva');
-}
-
-export async function disconnectCanva() {
-  mcp.disconnect('canva');
-  lastCanvaJobId = null;
-  return null;
-}
-
-/** Full details for one design (thumbnail URLs are signed and expire after ~15 min). */
-export async function canvaGetDesign(designId) {
-  requireCanva();
-  if (!designId) throw new Error('Pick a Canva design first.');
-  try {
-    const tool = await canvaTool('get');
-    const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, canvaArgs(tool, { design_id: designId })));
-    const d = normalizeDesign(findKey(parsed.json, ['design'], isObj) || parsed.data);
-    if (!d) throw new Error('Canva returned no design.');
-    return d;
-  } catch (e) {
-    throw canvaError('Could not open that Canva design', e);
-  }
-}
-
-/** Search (or, with no query, list recent) designs. → [{ id, title, thumbnailUrl, editUrl, viewUrl, updatedAt }] */
-export async function canvaDesigns({ query = '', limit = 20, thumbnails = true } = {}) {
-  requireCanva();
-  return withLoading('canva', async () => {
-    try {
-      const tool = await canvaTool('search');
-      const q = String(query || '').trim();
-      const { props } = schemaProps(tool);
-      const sortEnum = props.sort_by?.enum || [];
-      const args = canvaArgs(tool, {
-        query: q || undefined,
-        limit: 'limit' in props ? limit : undefined,
-        sort_by: !q && sortEnum.includes('modified_descending') ? 'modified_descending' : undefined,
-      });
-      const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, args));
-      const list = findKey(parsed.json, ['results', 'items', 'designs'], Array.isArray) || (Array.isArray(parsed.data) ? parsed.data : []);
-      const designs = list.map(normalizeDesign).filter(Boolean).slice(0, limit);
-      if (thumbnails) {
-        // search-designs results carry no thumbnail; fetch a few via get-design (best-effort).
-        const missing = designs.filter((d) => !d.thumbnailUrl).slice(0, 12);
-        await Promise.allSettled(missing.map(async (d) => {
-          const full = await canvaGetDesign(d.id);
-          Object.assign(d, {
-            thumbnailUrl: full.thumbnailUrl || d.thumbnailUrl,
-            editUrl: full.editUrl || d.editUrl,
-            viewUrl: full.viewUrl || d.viewUrl,
-            updatedAt: full.updatedAt || d.updatedAt,
-          });
-        }));
-      }
-      return designs;
-    } catch (e) {
-      throw canvaError('Canva search failed', e);
-    }
-  });
-}
-
-function pickDesignType(tool, wanted) {
-  const { props } = schemaProps(tool);
-  const prop = props.design_type;
+function pickDesignType(tool) {
+  const prop = schemaProps(tool).props.design_type;
   if (!prop) return undefined;
   const options = Array.isArray(prop.enum) ? prop.enum : [];
-  const w = String(wanted || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-  if (!options.length) return w || 'instagram_post';
-  if (w && options.includes(w)) return w;
-  if (w) {
-    const loose = options.find((o) => o.includes(w) || w.includes(o));
-    if (loose) return loose;
-  }
+  if (!options.length) return 'instagram_post';
   return CANVA_TYPE_FALLBACKS.find((o) => options.includes(o)) || options[0];
 }
 
-async function createFromCandidate(candidateId, jobId) {
+async function canvaGetDesign(designId) {
+  const tool = await canvaTool('get');
+  const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, canvaArgs(tool, { design_id: designId })));
+  return normalizeDesign(findKey(parsed.json, ['design'], isObj) || parsed.data);
+}
+
+async function canvaGenerate(prompt) {
+  const tool = await canvaTool('generate');
+  const args = canvaArgs(tool, { [mainTextProp(tool, 'query')]: prompt, design_type: pickDesignType(tool) });
+  const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, args));
+  const job = findKey(parsed.json, ['job'], isObj);
+  const jobId = job?.id || findKey(parsed.json, ['job_id', 'jobId'], (v) => typeof v === 'string' && v) || null;
+  const list = findKey(parsed.json, ['generated_designs', 'candidates'], Array.isArray) || [];
+  const candidates = list.map(normalizeCandidate).filter(Boolean);
+  const design = normalizeDesign(findKey(parsed.json, ['design_summary', 'design'], isObj));
+  if (!candidates.length && !design) {
+    const status = String(job?.status || '').toLowerCase();
+    if (status && status !== 'success') {
+      throw err('', status === 'failed' ? (job?.error?.message || 'generation failed.') : 'Canva is still working on it. Try again in a moment.');
+    }
+    throw err('', parsed.text ? clip(parsed.text, 240) : 'Canva returned no designs.');
+  }
+  return { jobId, candidates, design };
+}
+
+async function canvaCreateFromCandidate(candidateId, jobId) {
   const tool = await canvaTool('fromCandidate');
   const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, canvaArgs(tool, { job_id: jobId, candidate_id: candidateId })));
-  let design = normalizeDesign(findKey(parsed.json, ['design_summary', 'design'], isObj) || parsed.data);
-  if (!design) throw new Error(parsed.text ? clip(parsed.text, 200) : 'Canva did not return the new design.');
-  if (!design.thumbnailUrl) {
-    try {
-      const full = await canvaGetDesign(design.id);
-      design = { ...design, thumbnailUrl: full.thumbnailUrl, editUrl: design.editUrl || full.editUrl, viewUrl: design.viewUrl || full.viewUrl };
-    } catch { /* thumbnail is optional */ }
+  const design = normalizeDesign(findKey(parsed.json, ['design_summary', 'design'], isObj) || parsed.data);
+  if (!design) throw err('', parsed.text ? clip(parsed.text, 200) : 'Canva did not return the new design.');
+  return design;
+}
+
+async function canvaExportPng(designId) {
+  const tool = await canvaTool('export');
+  const { props } = schemaProps(tool);
+  const fmt = props.format || {};
+  const fmtType = Array.isArray(fmt.type) ? fmt.type[0] : fmt.type;
+  let format = { type: 'png' };
+  if (fmtType === 'string' || Array.isArray(fmt.enum)) {
+    format = (fmt.enum || []).find((x) => String(x).toLowerCase() === 'png') || 'png';
+  } else if (fmt.properties?.pages) {
+    format = { type: 'png', pages: [1] };
   }
-  return { design, text: parsed.text, raw: parsed };
-}
-
-/**
- * Generate design candidates from a brief (Canva AI). Canva asks clients to let the user pick a candidate, so by
- * default this returns candidates only; call canvaCreateFromCandidate(candidate.id, jobId) to make the real design.
- * With autoCreate: true the first candidate is turned into a design right away.
- * → { jobId, candidates: [{ id, thumbnailUrl, title, url }], design: {id,title,editUrl,viewUrl,thumbnailUrl}|null, designType, text, raw }
- */
-export async function canvaGenerate({ prompt, designType, brandKitId, autoCreate = false } = {}) {
-  requireCanva();
-  const p = String(prompt || '').trim();
-  if (!p) throw new Error('Describe the design you want Canva to make.');
-  return withLoading('canva', async () => {
-    try {
-      const tool = await canvaTool('generate');
-      const type = pickDesignType(tool, designType);
-      const textProp = mainTextProp(tool, 'query');
-      const args = canvaArgs(tool, { [textProp]: p, design_type: type, brand_kit_id: brandKitId || undefined });
-      const raw = await mcp.callTool('canva', tool.name, args);
-      const parsed = mcp.parseToolResult(raw);
-      const job = findKey(parsed.json, ['job'], isObj);
-      const jobId = job?.id || findKey(parsed.json, ['job_id', 'jobId'], (v) => typeof v === 'string' && v) || null;
-      const list = findKey(parsed.json, ['generated_designs', 'candidates'], Array.isArray) || [];
-      const candidates = list.map(normalizeCandidate).filter(Boolean);
-      let design = normalizeDesign(findKey(parsed.json, ['design_summary', 'design'], isObj));
-      if (!candidates.length && !design) {
-        const status = String(job?.status || '').toLowerCase();
-        if (status && status !== 'success') {
-          throw new Error(status === 'failed' ? (job?.error?.message || 'generation failed.') : 'Canva is still working on it — try again in a moment.');
-        }
-        throw new Error(parsed.text ? clip(parsed.text, 240) : 'Canva returned no designs.');
-      }
-      if (jobId) lastCanvaJobId = jobId;
-      if (!design && autoCreate && candidates[0] && jobId) design = (await createFromCandidate(candidates[0].id, jobId)).design;
-      return { jobId, candidates, design: design || null, designType: type || '', text: parsed.text, raw: parsed };
-    } catch (e) {
-      throw canvaError('Canva could not generate a design', e);
+  const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, canvaArgs(tool, { design_id: designId, format })));
+  const job = findKey(parsed.json, ['job'], isObj) || (isObj(parsed.data) ? parsed.data : {});
+  const rawUrls = job.urls || findKey(parsed.json, ['urls', 'download_urls', 'exports'], Array.isArray) || [];
+  let urls = rawUrls.map((u) => (typeof u === 'string' ? u : u?.url)).filter((u) => typeof u === 'string' && /^https:/.test(u));
+  if (!urls.length) urls = parsed.urls.filter((u) => /^https:/.test(u) && /export|download|\.png(\?|$)/i.test(u));
+  if (!urls.length && parsed.images[0]) urls = [parsed.images[0].src];
+  if (!urls.length) {
+    const status = String(job.status || '').toLowerCase();
+    if (status && status !== 'success') {
+      throw err('', status === 'failed' ? (job.error?.message || job.error?.code || 'export failed.') : 'Canva is still exporting. Try again in a moment.');
     }
-  });
+    throw err('', parsed.text ? clip(parsed.text, 240) : 'Canva returned no export link.');
+  }
+  return urls[0];
 }
 
-/** Turn a generated candidate into an editable design. → { design: { id, title, editUrl, viewUrl, thumbnailUrl }, text, raw } */
-export async function canvaCreateFromCandidate(candidateId, jobId) {
-  requireCanva();
-  const job = jobId || lastCanvaJobId;
-  if (!candidateId) throw new Error('Pick one of the Canva options first.');
-  if (!job) throw new Error('That Canva generation expired — generate again.');
-  return withLoading('canva', async () => {
-    try {
-      return await createFromCandidate(candidateId, job);
-    } catch (e) {
-      throw canvaError('Canva could not create that design', e);
-    }
-  });
-}
-
-/**
- * Export a design as PNG (first page). → { imageUrl, urls, jobId, raw }
- * Canva export URLs are signed and expire, so use them right away.
- */
-export async function canvaExportPng(designId) {
-  requireCanva();
-  if (!designId) throw new Error('Pick a Canva design first.');
-  return withLoading('canva', async () => {
-    try {
-      const tool = await canvaTool('export');
-      const { props } = schemaProps(tool);
-      const fmt = props.format || {};
-      const fmtType = Array.isArray(fmt.type) ? fmt.type[0] : fmt.type;
-      let format = { type: 'png' };
-      if (fmtType === 'string' || Array.isArray(fmt.enum)) {
-        format = (fmt.enum || []).find((x) => String(x).toLowerCase() === 'png') || 'png';
-      } else if (fmt.properties?.pages) {
-        format = { type: 'png', pages: [1] };
-      }
-      const args = canvaArgs(tool, { design_id: designId, format });
-      const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, args));
-      const job = findKey(parsed.json, ['job'], isObj) || (isObj(parsed.data) ? parsed.data : {});
-      const rawUrls = job.urls || findKey(parsed.json, ['urls', 'download_urls', 'exports'], Array.isArray) || [];
-      let urls = rawUrls.map((u) => (typeof u === 'string' ? u : u?.url)).filter((u) => typeof u === 'string' && /^https?:/.test(u));
-      if (!urls.length) urls = parsed.urls.filter((u) => /export|download|\.png(\?|$)/i.test(u));
-      if (!urls.length && parsed.images[0]) urls = [parsed.images[0].src];
-      if (!urls.length) {
-        const status = String(job.status || '').toLowerCase();
-        if (status && status !== 'success') {
-          throw new Error(status === 'failed' ? (job.error?.message || job.error?.code || 'export failed.') : 'Canva is still exporting — try again in a moment.');
-        }
-        throw new Error(parsed.text ? clip(parsed.text, 240) : 'Canva returned no export link.');
-      }
-      return { imageUrl: urls[0], urls, jobId: job.id || null, raw: parsed };
-    } catch (e) {
-      throw canvaError('Canva export failed', e);
-    }
-  });
-}
-
-/**
- * Build a Draft.visual for a Canva design: exports a PNG, falling back to a design thumbnail.
- * design: { id, title?, editUrl?, viewUrl?, thumbnailUrl? } (or a design id string).
- * With { refresh: true } the passed thumbnailUrl is ignored (it is likely the expired link being replaced) and the
- * fallback is a fresh thumbnail from get-design; if that is unavailable too, the export error is thrown.
- * → { visual: { type:'canva', designId, src, link, caption }, fromThumbnail, exportError }
- *   fromThumbnail: true when the PNG export failed and src is a short-lived thumbnail; exportError explains why.
- */
-export async function canvaVisual(design, { caption, refresh = false } = {}) {
-  const d = typeof design === 'string' ? { id: design } : design || {};
-  if (!d.id) throw new Error('Pick a Canva design first.');
-  let src = '';
-  let exportError = '';
+async function createWithCanva(prompt) {
+  let design;
   try {
-    src = (await canvaExportPng(d.id)).imageUrl;
-  } catch (e) {
-    exportError = e?.message || String(e);
-    let thumb = refresh ? '' : d.thumbnailUrl || '';
-    if (!thumb) {
-      try {
-        thumb = (await canvaGetDesign(d.id)).thumbnailUrl || '';
-      } catch { /* fall through to the export error */ }
+    const gen = await canvaGenerate(prompt);
+    design = gen.design;
+    if (!design) {
+      if (!gen.jobId || !gen.candidates[0]) throw err('', 'Canva returned no design to use.');
+      design = await canvaCreateFromCandidate(gen.candidates[0].id, gen.jobId);
     }
-    if (!thumb) throw e;
-    console.warn('[Lens] Canva export failed; using a temporary thumbnail', e);
+  } catch (e) {
+    throw canvaError('Canva could not make a design', e);
+  }
+  let src = '';
+  try {
+    src = await canvaExportPng(design.id);
+  } catch (e) {
+    let thumb = design.thumbnailUrl || '';
+    if (!thumb) {
+      try { thumb = (await canvaGetDesign(design.id))?.thumbnailUrl || ''; } catch { /* fall through */ }
+    }
+    if (!thumb) throw canvaError('Canva export failed', e);
+    console.warn('[Lens] Canva export failed; using the design thumbnail', e);
     src = thumb;
   }
-  return {
-    visual: {
-      type: 'canva',
-      designId: d.id,
-      src,
-      link: d.editUrl || d.viewUrl || '',
-      caption: caption || (d.title ? `Canva design: ${d.title}` : 'Canva design'),
-    },
-    fromThumbnail: !!exportError,
-    exportError,
-  };
+  // Canva's links expire, so keep the image itself. When Canva's host does not allow that, keep the design id
+  // and export again right before publishing.
+  const inline = await postableImage(src);
+  const out = { src: inline || src, provider: 'Canva' };
+  if (!inline) out.designId = design.id;
+  const link = httpUrl(design.editUrl || design.viewUrl);
+  if (link) out.link = link;
+  return out;
 }
 
-/** Export a Canva design and set it as the draft's visual. → updated draft */
-export async function attachCanvaToDraft(draftId, design, opts = {}) {
-  const { visual } = await canvaVisual(design, opts);
-  return updateDraft(draftId, { visual });
+/** Make an image for a post with Canva or Sculptex → { src, link?, provider }. */
+export async function createVisual({ provider, prompt } = {}) {
+  const p = providerName(provider);
+  if (p !== 'Canva' && p !== 'Sculptex') throw err('', 'Choose Canva or Sculptex.');
+  requireConnected(p);
+  const text = clip(str(prompt, 2000), 900);
+  if (!text) throw err('', 'Describe the visual first.');
+  try {
+    return p === 'Canva' ? await createWithCanva(text) : await renderWithSculptex(text);
+  } catch (e) {
+    emit(); // a sign-in that expired mid-call shows on the connection row
+    if (p === 'Sculptex' && !/^Sculptex/.test(e.message || '')) throw err(e.code || '', `Sculptex render failed: ${e.message}`);
+    throw e;
+  }
+}
+
+// ============================================================== publish
+
+const MAX_DATA_URL_CHARS = 4300000; // Vercel request bodies are capped at 4.5 MB
+
+const LINKEDIN_MAX_TEXT = 3000;
+
+/**
+ * Post to LinkedIn now → { id, url?, imageSkipped? }. Includes the visual (https or data:image URL) when it can;
+ * imageSkipped is true when the post went out without it.
+ */
+export async function publish(post) {
+  const p = post && typeof post === 'object' ? post : {};
+  const title = str(p.title, 300);
+  const copy = str(p.copy, 6000);
+  const text = [title, copy].filter(Boolean).join('\n\n');
+  if (!text) throw err('', 'The post is empty.');
+  if (text.length > LINKEDIN_MAX_TEXT) {
+    throw err('', `With its headline this post is ${text.length} characters; LinkedIn allows ${LINKEDIN_MAX_TEXT}. Shorten it and try again.`);
+  }
+  let src = String(p.visual?.src || '');
+  let imageSkipped = false;
+  // A Canva link kept instead of the image: export again for a fresh link while Canva is connected.
+  if (/^https:\/\//i.test(src) && p.visual?.designId && mcp.isConnected('canva')) {
+    try {
+      src = await canvaExportPng(String(p.visual.designId));
+    } catch (e) {
+      console.warn('[Lens] Canva re-export failed; posting the saved link', e);
+    }
+  }
+  let imageUrl;
+  if (/^https:\/\//i.test(src)) imageUrl = src;
+  else if (src) {
+    const ready = POSTABLE_IMAGE.test(src) && src.length <= MAX_DATA_URL_CHARS ? src : await postableImage(src);
+    if (ready && ready.length <= MAX_DATA_URL_CHARS) imageUrl = ready;
+    else imageSkipped = true;
+  }
+  const out = await linkedin.publish({ text, imageUrl });
+  const result = { id: out.id };
+  if (out.url) result.url = out.url;
+  if (imageSkipped || out.imageSkipped) result.imageSkipped = true;
+  return result;
 }

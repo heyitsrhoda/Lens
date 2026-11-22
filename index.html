@@ -1,74 +1,49 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Lens</title>
-  <meta name="description" content="Lens helps founders find people describing the problem they solve, reply with care, and turn recurring pain points into posts. Runs entirely in your browser — no accounts, no database." />
-  <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#F7F6F3" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#0E0E12" media="(prefers-color-scheme: dark)" />
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234F46E5'/%3E%3Cg transform='translate(4 4)' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='m14.31 8 5.74 9.94M9.69 8h11.48M7.38 12l5.74-9.94M9.69 16 3.95 6.06M14.31 16H2.83M16.62 12l-5.74 9.94'/%3E%3C/g%3E%3C/svg%3E" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="preconnect" href="https://esm.sh" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
-  <link rel="stylesheet" href="./css/base.css" />
-  <link rel="stylesheet" href="./css/views-a.css" />
-  <link rel="stylesheet" href="./css/views-b.css" />
-  <link rel="stylesheet" href="./css/views-c.css" />
-  <link rel="stylesheet" href="./css/views-d.css" />
-  <link rel="stylesheet" href="./css/views-start.css" />
-  <link rel="stylesheet" href="./css/views-stack.css" />
-  <script>
-    // Apply a saved theme before first paint (per-viewer preference only).
-    (function () {
-      try {
-        var t = localStorage.getItem('lens_theme');
-        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
-      } catch (e) {}
-    })();
-  </script>
-  <style>
-    .boot { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
-      font: 500 14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; color: #6B6B76; background: #F7F6F3; padding: 16px; text-align: center; }
-    .boot-mark { width: 44px; height: 44px; border-radius: 12px; background: #4F46E5; display: grid; place-items: center; animation: boot-spin 2.4s linear infinite; }
-    .boot-title { font-weight: 650; font-size: 18px; color: #1A1A1F; letter-spacing: -0.01em; }
-    .boot-slow { display: none; max-width: 360px; }
-    .boot.is-slow .boot-slow { display: block; }
-    .boot.is-slow .boot-mark { animation: none; }
-    @keyframes boot-spin { to { transform: rotate(360deg); } }
-    @media (prefers-reduced-motion: reduce) { .boot-mark { animation: none; } }
-    @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .boot { background: #0E0E12; color: #9A9AA8; } :root:not([data-theme="light"]) .boot-title { color: #ECECF1; } }
-    :root[data-theme="dark"] .boot { background: #0E0E12; color: #9A9AA8; }
-    :root[data-theme="dark"] .boot-title { color: #ECECF1; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lens · Founder Studio</title>
+<meta name="description" content="Lens turns your company site into LinkedIn posts and DMs you review with a swipe.">
+<meta name="theme-color" content="#17181b">
+<link rel="icon" type="image/svg+xml" href="./assets/Lens%20Icon.svg">
+<link rel="icon" type="image/png" sizes="1024x1024" href="./assets/Lens%20Icon.png">
+<link rel="apple-touch-icon" href="./assets/Lens%20Icon.png">
+<link rel="stylesheet" href="./css/app.css">
+<script type="module" src="./js/app.js"></script>
 </head>
 <body>
-  <noscript>
-    <div style="max-width:520px;margin:64px auto;padding:0 16px;font:15px/1.6 Inter,system-ui,sans-serif">
-      <h1 style="font-size:22px">Lens needs JavaScript</h1>
-      <p>Lens runs entirely in your browser — your data never leaves it except to the APIs you connect. Please enable JavaScript and reload the page.</p>
-    </div>
-  </noscript>
-  <div id="root">
-    <div class="boot" id="boot" role="status" aria-live="polite">
-      <div class="boot-mark" aria-hidden="true">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m14.31 8 5.74 9.94M9.69 8h11.48M7.38 12l5.74-9.94M9.69 16 3.95 6.06M14.31 16H2.83M16.62 12l-5.74 9.94"/></svg>
-      </div>
-      <div class="boot-title">Lens</div>
-      <div>Focusing…</div>
-      <div class="boot-slow">This is taking longer than usual. Lens loads React from esm.sh — check your connection or content blockers, then <a href="" onclick="location.reload();return false;">reload</a>.</div>
-    </div>
-  </div>
-  <script>
-    setTimeout(function () {
-      if (!window.__lensBooted) {
-        var b = document.getElementById('boot');
-        if (b) b.className = 'boot is-slow';
-      }
-    }, 12000);
-  </script>
-  <script type="module" src="./js/app.js"></script>
+<header id="header" class="header entry"><nav id="nav" class="nav" aria-label="Workspace" hidden></nav><div class="wordmark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 101 32" width="101" height="32" role="img" aria-label="Lens">
+  <defs>
+    <linearGradient id="lens-glass" x1="0%" x2="100%" y1="0%" y2="100%" gradientUnits="objectBoundingBox">
+      <stop stop-color="#C6E2FD" stop-opacity=".18"/>
+      <stop offset=".53" stop-color="#B8D8E7" stop-opacity=".09"/>
+      <stop offset="1" stop-color="#E4F9FF" stop-opacity=".37"/>
+    </linearGradient>
+    <linearGradient id="lens-edge" x1="0%" x2="100%" y1="0%" y2="100%" gradientUnits="objectBoundingBox">
+      <stop stop-color="#EAF9FF" stop-opacity=".91"/>
+      <stop offset=".55" stop-color="#AACCDC" stop-opacity=".48"/>
+      <stop offset="1" stop-color="#EBF9FF" stop-opacity=".82"/>
+    </linearGradient>
+    <radialGradient id="lens-glint" cx=".26" cy=".23" r=".58">
+      <stop stop-color="#F5FCFF" stop-opacity=".29"/>
+      <stop offset=".72" stop-color="#F5FCFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g id="lens-glass-mark">
+    <g transform="rotate(-24 13.2 15.7)">
+      <ellipse cx="13.2" cy="15.7" rx="9.7" ry="11.3" fill="url(#lens-glass)" stroke="url(#lens-edge)" stroke-width="1.1"/>
+      <ellipse cx="13.2" cy="15.7" rx="8.65" ry="10.2" fill="url(#lens-glint)"/>
+    </g>
+    <g transform="rotate(24 26 16.7)">
+      <ellipse cx="26" cy="16.7" rx="9.7" ry="11.3" fill="url(#lens-glass)" stroke="url(#lens-edge)" stroke-width="1.1"/>
+      <ellipse cx="26" cy="16.7" rx="8.65" ry="10.2" fill="url(#lens-glint)"/>
+    </g>
+  </g>
+  <path fill="#F6F4EE" d="M45.938 24V4.673H49.643V24ZM59.897 19.544 63.589 20.164Q62.877 22.194 61.341 23.255Q59.805 24.316 57.498 24.316Q53.846 24.316 52.093 21.93Q50.708 20.019 50.708 17.105Q50.708 13.625 52.528 11.654Q54.347 9.683 57.129 9.683Q60.253 9.683 62.059 11.746Q63.866 13.809 63.787 18.067H54.505Q54.545 19.715 55.402 20.632Q56.259 21.548 57.538 21.548Q58.408 21.548 59.001 21.073Q59.594 20.599 59.897 19.544ZM60.108 15.8Q60.069 14.191 59.278 13.354Q58.487 12.517 57.353 12.517Q56.14 12.517 55.349 13.4Q54.558 14.284 54.571 15.8ZM77.891 24H74.186V16.854Q74.186 14.587 73.949 13.921Q73.712 13.255 73.178 12.886Q72.644 12.517 71.892 12.517Q70.93 12.517 70.165 13.044Q69.401 13.572 69.117 14.442Q68.834 15.312 68.834 17.659V24H65.129V9.999H68.57V12.056Q70.403 9.683 73.184 9.683Q74.41 9.683 75.426 10.124Q76.441 10.566 76.961 11.251Q77.482 11.937 77.687 12.807Q77.891 13.677 77.891 15.299ZM78.693 20.005 82.411 19.438Q82.648 20.52 83.373 21.08Q84.098 21.64 85.404 21.64Q86.841 21.64 87.566 21.113Q88.053 20.744 88.053 20.124Q88.053 19.702 87.79 19.425Q87.513 19.162 86.55 18.938Q82.068 17.949 80.868 17.131Q79.207 15.998 79.207 13.98Q79.207 12.161 80.644 10.922Q82.081 9.683 85.1 9.683Q87.974 9.683 89.372 10.619Q90.769 11.555 91.297 13.387L87.803 14.033Q87.579 13.216 86.953 12.781Q86.326 12.346 85.166 12.346Q83.703 12.346 83.07 12.754Q82.648 13.044 82.648 13.506Q82.648 13.901 83.017 14.178Q83.518 14.547 86.478 15.22Q89.438 15.892 90.611 16.868Q91.771 17.856 91.771 19.623Q91.771 21.548 90.163 22.932Q88.554 24.316 85.404 24.316Q82.543 24.316 80.875 23.156Q79.207 21.996 78.693 20.005ZM93.364 24V20.295H97.069V24Z"/>
+</svg></div><button id="settings-nav" class="icon ghost settings-nav" data-action="settings" aria-label="Settings" title="Settings" hidden></button></header>
+<main id="main"></main>
+<div id="notice" role="status" hidden></div>
+<noscript><p class="page muted">Lens needs JavaScript. Enable it and reload the page.</p></noscript>
 </body>
 </html>

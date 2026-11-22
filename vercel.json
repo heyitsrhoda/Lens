@@ -4,6 +4,9 @@
   "functions": {
     "api/you.js": {
       "maxDuration": 60
+    },
+    "api/linkedin/*.js": {
+      "maxDuration": 30
     }
   },
   "headers": [

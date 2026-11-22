@@ -1,5 +1,5 @@
 // Browser MCP client (Streamable HTTP transport + OAuth 2.1 with PKCE, dynamic client registration).
-// Multi-server: every function takes a connection key ('sculptex' | 'canva'); state lives in state.connections[key].
+// Multi-server: every function takes a connection key ('sculptex' | 'canva').
 // No API keys anywhere — each server is just its MCP URL; sign-in is the server's own OAuth flow.
 //
 // Sculptex, verified against the live server:
@@ -18,11 +18,9 @@
 //   the 401 — the browser cannot read WWW-Authenticate there, so discovery falls back to the path-suffixed
 //   well-known URL (which is the same document).
 //
-// Connection state (tokens, session id, tools, status) only lives in state.connections, which the
-// store persists to sessionStorage — closing the tab forgets it. The pending OAuth record also
-// lives in sessionStorage only.
-
-import { getState, setState, toast } from '../store.js';
+// Connection state (tokens, session id, tools, status, account) lives only in sessionStorage under
+// 'lens-mcp-v3' — closing the tab forgets it. The pending OAuth record and registered clients also live in
+// sessionStorage only. Nothing here touches localStorage.
 
 export const PROTOCOL_VERSION = '2025-06-18';
 export const DEFAULT_URLS = {
@@ -35,8 +33,9 @@ const SCOPE_OVERRIDES = {};
 // When a server advertises no scopes at all.
 const SCOPE_FALLBACK = { sculptex: 'mcp' };
 
-const PENDING_KEY = 'lens_mcp_pending_v1';
-const CLIENTS_KEY = 'lens_mcp_clients_v1';
+const STATE_KEY = 'lens-mcp-v3';
+const PENDING_KEY = 'lens-mcp-v3-pending';
+const CLIENTS_KEY = 'lens-mcp-v3-clients';
 const RPC_TIMEOUT_MS = 30000;
 const CALL_TIMEOUT_MS = 240000;
 const PENDING_MAX_AGE_MS = 30 * 60 * 1000;
@@ -55,8 +54,37 @@ class AuthRequiredError extends Error {
 
 // ---------------------------------------------------------------- state helpers
 
+// ---------------------------------------------------------------- own tiny store (sessionStorage + listeners)
+
+const listeners = new Set();
+let store = null;
+
+function loadStore() {
+  if (store) return store;
+  store = readSession(STATE_KEY);
+  if (!store || typeof store !== 'object' || Array.isArray(store)) store = {};
+  return store;
+}
+
+function saveStore() {
+  writeSession(STATE_KEY, store || {});
+}
+
+/** Subscribe to connection changes: fn(key, connection). Returns unsubscribe. */
+export function onChange(fn) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+function emit(key) {
+  const conn = getConnection(key);
+  for (const fn of [...listeners]) {
+    try { fn(key, conn); } catch (e) { console.warn('[Lens] MCP listener failed', e); }
+  }
+}
+
 export function getConnection(key) {
-  const c = getState().connections?.[key] || {};
+  const c = loadStore()[key] || {};
   return {
     ...c,
     url: c.url || DEFAULT_URLS[key] || '',
@@ -77,12 +105,12 @@ export function isConnected(key) {
   return getConnection(key).status === 'connected';
 }
 
-function patchConn(key, patch) {
-  setState((s) => {
-    const all = s.connections || {};
-    const prev = all[key] || { url: DEFAULT_URLS[key] || '' };
-    return { connections: { ...all, [key]: { ...prev, ...patch } } };
-  });
+export function patchConn(key, patch) {
+  const all = loadStore();
+  const prev = all[key] || { url: DEFAULT_URLS[key] || '' };
+  all[key] = { ...prev, ...patch };
+  saveStore();
+  emit(key);
 }
 
 function rt(key) {
@@ -424,7 +452,7 @@ async function registerClient(asMeta, redirect, scope) {
   const cache = readSession(CLIENTS_KEY);
   if (cache[cacheKey]?.client_id) return cache[cacheKey];
   if (!asMeta.registration_endpoint) {
-    throw new Error('This server does not support automatic client registration. Paste an access token instead.');
+    throw new Error('This server does not support automatic client registration.');
   }
   const res = await safeFetch(asMeta.registration_endpoint, {
     method: 'POST',
@@ -588,12 +616,6 @@ export async function connect(key, { interactive = true } = {}) {
     return getConnection(key);
   } catch (e) {
     if (e instanceof AuthRequiredError) {
-      const current = getConnection(key);
-      if (current.auth?.manual) {
-        const msg = `${label(key)} rejected the pasted token. Paste a fresh token or sign in instead.`;
-        patchConn(key, { status: 'error', error: msg, auth: null, sessionId: null });
-        throw new Error(msg);
-      }
       if (!interactive) {
         patchConn(key, { status: 'disconnected', error: '', auth: null, sessionId: null });
         return getConnection(key);
@@ -808,16 +830,22 @@ export function pickTool(key, intents = []) {
   return best;
 }
 
-/** Use a pasted access token instead of OAuth, then connect with it. */
-export async function setManualToken(key, token) {
-  const value = String(token || '').trim().replace(/^Bearer\s+/i, '');
-  if (!value) throw new Error('Paste an access token first.');
-  rt(key).initialized = false;
-  patchConn(key, { auth: { accessToken: value, manual: true }, sessionId: null, status: 'disconnected', error: '' });
-  return connect(key);
+/** True when the current URL carries an OAuth return (?code=&state= or ?error=&state=) that this client started. */
+export function hasPendingCallback() {
+  try {
+    const params = new URLSearchParams(location.search);
+    const state = params.get('state');
+    if (!state || (!params.get('code') && !params.get('error'))) return false;
+    return Boolean(readSession(PENDING_KEY)[state]);
+  } catch {
+    return false;
+  }
 }
 
-/** Called by app.js on load when location.search has ?code=&state= (or ?error=). */
+/**
+ * Finish an OAuth return on page load. Resolves to null when the URL is not an MCP callback, else
+ * { key, label, ok, error? }. Never throws; errors are also stored on the connection.
+ */
 export function handleOAuthCallback() {
   if (!callbackPromise) callbackPromise = processCallback();
   return callbackPromise;
@@ -833,18 +861,17 @@ async function processCallback() {
   const pending = takePending(state);
   if (!pending) {
     cleanCallbackUrl();
-    toast('That sign-in link expired or was opened in another tab. Connect again from Settings.', 'error');
-    return { ok: false, error: 'Unknown or expired sign-in state.' };
+    return { key: null, label: '', ok: false, error: 'That sign-in link expired or was opened in another tab. Connect again from Settings.' };
   }
   const key = pending.key;
+  const name = label(key);
   cleanCallbackUrl(pending.returnHash);
 
   if (error) {
     const desc = params.get('error_description') || error;
-    const msg = error === 'access_denied' ? `${label(key)} sign-in was cancelled.` : `${label(key)} sign-in failed: ${desc}`;
+    const msg = error === 'access_denied' ? `${name} sign-in was cancelled.` : `${name} sign-in failed: ${desc}`;
     patchConn(key, { status: 'error', error: msg, auth: null });
-    toast(msg, 'error');
-    return { key, ok: false, error: msg };
+    return { key, label: name, ok: false, error: msg };
   }
 
   try {
@@ -861,28 +888,22 @@ async function processCallback() {
     rt(key).initialized = false;
     patchConn(key, { auth, sessionId: null, status: 'connecting', error: '' });
   } catch (e) {
-    const msg = `${label(key)} sign-in failed: ${e.message}`;
+    const msg = `${name} sign-in failed: ${e.message}`;
     patchConn(key, { status: 'error', error: msg, auth: null });
-    toast(msg, 'error');
-    return { key, ok: false, error: msg };
+    return { key, label: name, ok: false, error: msg };
   }
 
   // The tokens are good; a failed handshake keeps them so "Connect" can retry without a new sign-in.
   try {
     const conn = await connect(key, { interactive: false });
-    if (conn.status === 'connected') {
-      toast(`${label(key)} connected · ${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`, 'success');
-      return { key, ok: true, connection: conn };
-    }
-    const msg = `${label(key)} did not accept the new sign-in. Try connecting again.`;
+    if (conn.status === 'connected') return { key, label: name, ok: true };
+    const msg = `${name} did not accept the new sign-in. Try connecting again.`;
     patchConn(key, { status: 'error', error: msg });
-    toast(msg, 'error');
-    return { key, ok: false, error: msg };
+    return { key, label: name, ok: false, error: msg };
   } catch (e) {
-    const msg = `Signed in to ${label(key)}, but connecting failed: ${e.message}. Try Connect again.`;
+    const msg = `Signed in to ${name}, but connecting failed: ${e.message}. Try Connect again.`;
     patchConn(key, { status: 'error', error: msg });
-    toast(msg, 'error');
-    return { key, ok: false, error: msg };
+    return { key, label: name, ok: false, error: msg };
   }
 }
 
@@ -901,4 +922,13 @@ export function disconnect(key) {
     instructions: '',
     account: null,
   });
+}
+
+/** Forget every server and the registered OAuth clients. */
+export function disconnectAll() {
+  for (const key of Object.keys(DEFAULT_URLS)) disconnect(key);
+  try {
+    sessionStorage.removeItem(PENDING_KEY);
+    sessionStorage.removeItem(CLIENTS_KEY);
+  } catch { /* storage unavailable */ }
 }

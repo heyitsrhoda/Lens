@@ -17,6 +17,9 @@ Vercel function api/you.js so live mode works locally:
 
 The key comes from the browser's `x-you-key` header, else the YOU_API_KEY environment variable.
 Keys and request bodies are never logged. Dotfiles (.git, credentials, ...) are never served.
+
+LinkedIn (api/linkedin/*.js) is not emulated: /api/linkedin/* answers 501 JSON here, and the app reports that
+LinkedIn sign-in needs the Vercel deployment.
 """
 
 import hashlib
@@ -421,10 +424,21 @@ class LensHandler(SimpleHTTPRequestHandler):
             return
         super().do_HEAD()
 
+    def _linkedin(self, path):
+        # LinkedIn sign-in/posting are Vercel functions (api/linkedin/*.js) that need the deployment's
+        # LINKEDIN_CLIENT_ID/SECRET and an HTTPS callback; this dev server does not emulate them.
+        if path == "/api/linkedin" or path.startswith("/api/linkedin/"):
+            self._send_json(501, {"ok": False, "connected": False,
+                                  "error": "LinkedIn needs the Vercel deployment (dev/serve.py only serves /api/you)."})
+            return True
+        return False
+
     def do_GET(self):
         path, query = self._route()
         if self._is_api(path):
             self._api("GET", query)
+            return
+        if self._linkedin(path):
             return
         if self._blocked(path) or path.startswith("/api/"):
             self.send_error(404)
@@ -435,6 +449,8 @@ class LensHandler(SimpleHTTPRequestHandler):
         path, query = self._route()
         if self._is_api(path):
             self._api("POST", query)
+            return
+        if self._linkedin(path):
             return
         self.send_error(405)
 

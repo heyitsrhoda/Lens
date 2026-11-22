@@ -1,0 +1,956 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lens · Founder Studio</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%20width%3D%2264%22%20height%3D%2264%22%20role%3D%22img%22%20aria-label%3D%22Lens%20app%20icon%22%3E%0A%20%20%3Cdefs%3E%0A%20%20%20%20%3ClinearGradient%20id%3D%22lens-glass%22%20x1%3D%220%25%22%20x2%3D%22100%25%22%20y1%3D%220%25%22%20y2%3D%22100%25%22%20gradientUnits%3D%22objectBoundingBox%22%3E%0A%20%20%20%20%20%20%3Cstop%20stop-color%3D%22%23C6E2FD%22%20stop-opacity%3D%22.18%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%22.53%22%20stop-color%3D%22%23B8D8E7%22%20stop-opacity%3D%22.09%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23E4F9FF%22%20stop-opacity%3D%22.37%22%2F%3E%0A%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%3ClinearGradient%20id%3D%22lens-edge%22%20x1%3D%220%25%22%20x2%3D%22100%25%22%20y1%3D%220%25%22%20y2%3D%22100%25%22%20gradientUnits%3D%22objectBoundingBox%22%3E%0A%20%20%20%20%20%20%3Cstop%20stop-color%3D%22%23EAF9FF%22%20stop-opacity%3D%22.91%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%22.55%22%20stop-color%3D%22%23AACCDC%22%20stop-opacity%3D%22.48%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23EBF9FF%22%20stop-opacity%3D%22.82%22%2F%3E%0A%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%3CradialGradient%20id%3D%22lens-glint%22%20cx%3D%22.26%22%20cy%3D%22.23%22%20r%3D%22.58%22%3E%0A%20%20%20%20%20%20%3Cstop%20stop-color%3D%22%23F5FCFF%22%20stop-opacity%3D%22.29%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%22.72%22%20stop-color%3D%22%23F5FCFF%22%20stop-opacity%3D%220%22%2F%3E%0A%20%20%20%20%3C%2FradialGradient%3E%0A%20%20%3C%2Fdefs%3E%0A%20%20%3Cg%20transform%3D%22translate%280.64%206.08%29%20scale%281.6%29%22%3E%0A%20%20%3Cg%20id%3D%22lens-glass-mark%22%3E%0A%20%20%20%20%3Cg%20transform%3D%22rotate%28-24%2013.2%2015.7%29%22%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2213.2%22%20cy%3D%2215.7%22%20rx%3D%229.7%22%20ry%3D%2211.3%22%20fill%3D%22url%28%23lens-glass%29%22%20stroke%3D%22url%28%23lens-edge%29%22%20stroke-width%3D%221.1%22%2F%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2213.2%22%20cy%3D%2215.7%22%20rx%3D%228.65%22%20ry%3D%2210.2%22%20fill%3D%22url%28%23lens-glint%29%22%2F%3E%0A%20%20%20%20%3C%2Fg%3E%0A%20%20%20%20%3Cg%20transform%3D%22rotate%2824%2026%2016.7%29%22%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2226%22%20cy%3D%2216.7%22%20rx%3D%229.7%22%20ry%3D%2211.3%22%20fill%3D%22url%28%23lens-glass%29%22%20stroke%3D%22url%28%23lens-edge%29%22%20stroke-width%3D%221.1%22%2F%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2226%22%20cy%3D%2216.7%22%20rx%3D%228.65%22%20ry%3D%2210.2%22%20fill%3D%22url%28%23lens-glint%29%22%2F%3E%0A%20%20%20%20%3C%2Fg%3E%0A%20%20%3C%2Fg%3E%0A%20%20%3C%2Fg%3E%0A%3C%2Fsvg%3E%0A">
+<style>
+:root{color-scheme:dark;--bg:#17181b;--panel:#212226;--surface:#2a2c31;--line:#383a40;--text:#f6f4ee;--muted:#aaaab3;--mint:#bdf4c6;--coral:#ffab9e;--lavender:#d4c9ff;--radius:25px}
+*{box-sizing:border-box} [hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 Arial,sans-serif}button,input,textarea,select{font:inherit}a{color:var(--mint)}button{cursor:pointer}button:disabled{cursor:default;opacity:.5}button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--lavender);outline-offset:4px}h1,h2,h3,p{margin:0}h1,h2{letter-spacing:-.055em;line-height:1.06}h1{font-size:clamp(34px,6vw,58px)}h2{font-size:30px}small,.muted{color:var(--muted)}small{font-size:13px}
+a:hover{text-decoration:none}.header{height:76px;padding:0 clamp(16px,5vw,56px);display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;border-bottom:1px solid var(--line)}.header.entry{border:0}.wordmark{gap:9px;display:flex;align-items:center;color:var(--text);font-size:27px;font-weight:800;letter-spacing:-.075em;grid-column:2}.nav{grid-column:1;grid-row:1;display:flex;gap:8px}.settings-nav{grid-column:3;grid-row:1;justify-self:end}
+#main{min-height:calc(100dvh - 76px);display:grid;align-content:start}.entry-page{min-height:calc(100dvh - 76px);display:grid;place-items:center;padding:22px 22px 16vh}.entry-form{width:min(100%,550px);display:grid;gap:17px}.entry-form label{font-size:clamp(28px,5vw,42px);font-weight:750;letter-spacing:-.06em;text-align:center}.url-bar{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;border:1px solid #54565b;border-radius:999px;background:var(--panel);padding:8px 8px 8px 18px}.url-bar input{min-width:0;width:100%;padding:11px 0;background:none;border:0;color:var(--text);font-size:18px}.url-bar input:focus-visible{outline:none}.url-bar:focus-within{border-color:var(--mint)}.url-dot{width:17px;height:17px;border:1.5px solid var(--muted);border-radius:50%}.entry-error{min-height:20px;text-align:center;color:var(--coral)}
+.icon,.btn{border:1px solid var(--line);color:var(--text);background:var(--surface);border-radius:12px;font-weight:700;display:inline-grid;place-items:center;min-height:42px;padding:0 13px;text-decoration:none}.icon{width:44px;padding:0;font-size:23px}.icon.round{border-radius:50%}.btn:hover,.icon:hover{filter:brightness(1.17)}.primary{background:var(--mint);border-color:var(--mint);color:#18251c}.ghost{background:transparent}.active{color:var(--mint);border-color:#526b57}.tools{display:flex;gap:8px;flex-wrap:wrap}.label{display:block;color:var(--mint);font-size:11px;letter-spacing:.14em;font-weight:800;text-transform:uppercase}
+.page{width:min(100% - 32px,760px);margin:0 auto;padding:36px 0 44px}.page-head{display:grid;gap:7px;margin-bottom:26px}.page-head h1:focus{outline:none}
+.thread{display:grid;gap:14px;max-height:min(52vh,500px);overflow:auto;overscroll-behavior:contain;padding:2px 4px 10px}.turn{display:flex;gap:9px;align-items:flex-start}.turn.user{justify-content:flex-end}.mini-logo{flex:none;background:var(--mint);color:#19271e;width:24px;height:24px;display:grid;place-items:center;border-radius:50%;font-weight:800}.bubble{background:var(--surface);padding:10px 13px;border-radius:3px 15px 15px 15px;max-width:85%;white-space:pre-wrap;overflow-wrap:anywhere}.user .bubble{background:var(--lavender);color:#1e182b;border-radius:15px 3px 15px 15px}.field{width:100%;color:var(--text);background:var(--bg);padding:10px 12px;border:1px solid var(--line);border-radius:12px}.field::placeholder{color:#92939e}.connections{display:grid;gap:8px}.connection{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 12px;border:1px solid var(--line);border-radius:12px}.connection .btn{min-height:34px}.connection small{display:block}
+.review{width:min(100% - 32px,540px);margin:auto;padding:32px 0 42px;display:grid;gap:16px}.review-top{display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:13px}.review-top h1{font-size:29px;color:var(--text)}.stack{position:relative;margin:0 0 7px;isolation:isolate}.stack.has-next:before{content:'';position:absolute;inset:10px 12px -8px;background:#1e2024;border-radius:25px;border:1px solid var(--line);z-index:-1}.post-card{position:relative;border:1px solid #42444a;background:var(--panel);border-radius:var(--radius);overflow:hidden;touch-action:pan-y;transform:translateX(var(--offset,0px)) rotate(var(--tilt,0deg));transition:transform .2s ease;min-height:320px}.post-card.dragging{transition:none;user-select:none;cursor:grabbing}.post-meta{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 20px 0}.post-meta span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.post-body{padding:13px 20px 17px;display:grid;gap:9px}.post-body h2{overflow-wrap:anywhere}.post-copy{white-space:pre-wrap;overflow-wrap:anywhere;max-height:165px;overflow:auto}.post-visual{height:110px;display:grid;grid-template-columns:1fr 90px;align-items:center;padding:0 20px;background:#d6cbf7;color:#282038;border-radius:15px;gap:12px;overflow:hidden}.post-visual strong{font-size:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.visual-orb{width:67px;height:67px;border:11px solid #22252c;border-radius:50%;transform:rotate(-20deg) scaleX(.83);box-shadow:9px 9px 0 #746693;display:grid;place-items:center}.visual-orb:after{content:'';width:18px;height:18px;border-radius:50%;background:#22252c}
+.swipe-overlay{position:absolute;inset:0;z-index:2;display:grid;place-items:center;pointer-events:none;opacity:var(--strength,0);background:var(--tint,#bdf4c6);color:#15181a}.swipe-overlay span{border:3px solid currentColor;border-radius:50%;width:78px;height:78px;display:grid;place-items:center;font-size:46px;font-weight:800}.decisions{display:flex;justify-content:center;gap:13px}.decisions .icon{width:58px;height:58px;font-size:29px;transition:background-color .13s}.decline{color:var(--coral)}.approve{color:var(--mint)}.decisions .lit{color:#15181a}.review-hint{text-align:center;color:var(--muted);font-size:13px}.empty{text-align:center;padding:35px 18px;display:grid;gap:12px}
+.analytics-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.metric{background:var(--panel);border:1px solid var(--line);border-radius:17px;padding:16px;display:grid;gap:7px}.metric strong{font-size:33px;line-height:1}.bars{height:42px;display:flex;align-items:end;gap:5px}.bars i{display:block;width:11%;border-radius:3px;background:var(--lavender);opacity:.85}
+.settings-block{padding:16px;border-radius:16px;border:1px solid var(--line);background:var(--panel);display:grid;gap:10px;margin-bottom:12px}.settings-block h2{font-size:23px}.settings-grid{display:grid;gap:10px}.form-label{display:grid;gap:4px;font-weight:700}
+#notice{position:fixed;z-index:10;bottom:14px;right:14px;max-width:calc(100% - 28px);padding:13px 16px;background:var(--mint);color:#142219;border-radius:12px;font-weight:700;box-shadow:0 4px 25px #0006}
+@media(max-width:520px){.header{padding:0 11px}.nav{gap:4px}.nav .btn{padding:0 7px;font-size:12px}.wordmark{font-size:23px}.icon{width:40px}.page,.review{width:min(100% - 24px,760px)}.review{padding-top:22px}.post-body,.post-meta{padding-left:14px;padding-right:14px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;scroll-behavior:auto!important}}
+
+.scan-page{display:grid;justify-items:center;gap:19px;width:min(100% - 32px,760px);margin:auto;padding:clamp(46px,10vh,90px) 0 38px;text-align:center}
+.scan-stage{position:relative;isolation:isolate;width:100%;height:clamp(190px,38vw,310px);overflow:hidden;border-radius:30px;background:radial-gradient(ellipse at 50% 63%,#38474a 0%,#252c34 38%,#1b1d23 71%);border:1px solid var(--line)}
+.scan-stage::before{content:'';position:absolute;inset:0;background:linear-gradient(#ccf5eb0a 1px,transparent 1px),linear-gradient(90deg,#ccf5eb0a 1px,transparent 1px);background-size:29px 29px;mask-image:radial-gradient(ellipse,#000 10%,transparent 78%)}
+.scan-lenses{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:clamp(4px,2vw,15px)}
+.glass-lens{position:relative;isolation:isolate;width:min(39%,230px);aspect-ratio:1.12;border-radius:50%;border:1px solid #d5eef7aa;background:radial-gradient(ellipse at 22% 16%,#f4fcfd80 0%,#d9f2fa0c 25%,transparent 53%),radial-gradient(ellipse at 73% 77%,#a8c5ffc4 0%,#a6e1d940 25%,#26323e99 64%),linear-gradient(145deg,#d4c9ff55,#bdf4c622);box-shadow:inset 0 0 20px #dceafd66,inset -9px -12px 24px #151d355e,0 22px 32px #10151c85;transform:rotate(-13deg)}
+.glass-lens.second{transform:rotate(13deg);margin-top:10px}
+.glass-lens::before{content:'';position:absolute;inset:10%;border:1px solid #e7f4ff4f;border-radius:50%;background:linear-gradient(155deg,transparent 28%,#edffff25 40%,transparent 53%);animation:glass-glint 2.5s ease-in-out both}
+.glass-lens::after{content:'';position:absolute;inset:27%;border-radius:50%;border:1px solid #e4fff675;background:radial-gradient(ellipse,#cbf5de60 0%,#b0cefd26 56%,transparent 72%);box-shadow:inset 0 0 13px #bdedf274,0 1px 12px #bdf4c622}
+.scan-token{position:absolute;left:var(--x);top:var(--y);max-width:43%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 10px;border:1px solid #ddf4fa69;border-radius:99px;background:#1b2132d9;color:#e8f6f6;font-size:clamp(11px,2.4vw,13px);box-shadow:0 5px 16px #12182184;animation:scan-drift 2.55s ease-in-out var(--delay,0s) both}
+.scan-token.behind{z-index:-1}
+.scan-token.icon-token{font-size:clamp(12px,2.8vw,17px);display:grid;place-items:center;width:32px;height:32px;padding:0;color:var(--mint)}
+.scan-status{display:grid;gap:9px;justify-items:center}.scan-status h1{font-size:clamp(29px,5vw,44px);overflow-wrap:anywhere}
+.scan-progress{width:min(160px,48vw);height:4px;border-radius:12px;background:var(--surface);overflow:hidden}
+.scan-progress::after{content:'';display:block;width:100%;height:100%;border-radius:inherit;background:var(--mint);transform-origin:left;animation:scan-grow 2.65s linear both}
+.onboard-actions{display:flex;justify-content:flex-end;margin-top:8px}.onboard-actions .btn{min-height:34px}.chat-footer>.onboard-actions:first-child{margin-top:0}
+@keyframes scan-grow{from{transform:scaleX(.04)}to{transform:scaleX(1)}}
+@keyframes scan-drift{0%{opacity:.32;transform:translate(-32%,-24%) rotate(-9deg) scale(.85)}45%{opacity:1}100%{opacity:.8;transform:translate(28%,28%) rotate(7deg)}}
+@keyframes glass-glint{from{opacity:.4;transform:translateX(-5%)}to{opacity:1;transform:translateX(5%)}}
+@media(prefers-reduced-motion:reduce){.scan-token,.glass-lens::before,.scan-progress::after{animation:none}}
+
+body{overflow-x:clip}
+
+
+
+.wordmark svg{display:block;width:auto;height:32px}.mini-logo{background:transparent;width:34px}.mini-logo svg{width:30px;height:25px}
+.line-icon{width:20px;height:20px;vertical-align:middle;flex:none}
+.nav .icon,.settings-nav{background:transparent;border-color:#3c4048}
+.icon[aria-current=page]{background:#252c2b;border-color:#638172;color:var(--mint)}
+.decisions{align-items:center;gap:12px}
+.decisions .decision{width:48px;height:40px;min-height:40px;border-radius:9px;background:#23262c;border-color:#424751;transition:background-color .18s,color .18s,border-color .18s}
+.decisions .decline{color:#dca69f}
+.decisions .approve{color:#b6d7be}
+.decisions .decision:hover{border-color:currentColor}
+.swipe-overlay{background:color-mix(in srgb,var(--tint) 67%,transparent);transition:opacity .2s}
+.dragging .swipe-overlay{transition:none}
+.swipe-overlay span{display:grid;place-items:center;width:62px;height:62px;border:1px solid currentColor;border-radius:17px;background:var(--tint)}
+.swipe-overlay .line-icon{width:30px;height:30px}
+.post-card.exiting{opacity:0;transition:transform .28s cubic-bezier(.34,.03,.51,1),opacity .28s ease;pointer-events:none}
+.post-card.exiting .swipe-overlay{transition:opacity .12s ease}
+.empty-review{min-height:calc(100dvh - 76px);display:grid;place-items:center;padding:24px}
+.empty-content{display:grid;justify-items:center;gap:14px;text-align:center}
+.empty-check{display:grid;place-items:center;width:49px;height:49px;border-radius:15px;border:1px solid #4f6657;background:#26332b;color:var(--mint)}
+.empty-content h1{font-size:clamp(26px,5vw,36px)}.empty-content .btn{margin-top:3px}
+.calendar-page{width:min(100% - 32px,1000px)}
+.calendar-header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:13px}
+.calendar-scroll{overflow-x:auto}
+.calendar-week{display:grid;grid-template-columns:repeat(7,minmax(98px,1fr));min-width:696px;gap:7px}
+.calendar-day{min-height:116px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:7px;min-width:0}
+.calendar-day.drop-target{background:#253931;border-color:var(--mint)}
+.calendar-date{display:block;color:var(--text);padding:4px 3px;font-weight:700}
+.calendar-item{display:block;width:100%;margin-top:5px;text-align:left;cursor:grab;border:1px solid #51665a;border-radius:8px;background:#283730;color:var(--text);padding:5px 6px}
+.calendar-item:active{cursor:grabbing}.calendar-item[aria-pressed=true]{border-color:var(--mint)}.calendar-item strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.calendar-item small{font-size:11px;color:#c1d8cb}
+
+
+
+
+@media(max-width:520px){.nav .icon{width:35px;min-height:36px}.nav .line-icon{width:17px;height:17px}}
+
+.header{position:sticky;top:0;z-index:5;background:var(--bg)}
+.chat-workspace{height:calc(100vh - 76px);height:calc(100dvh - 76px);display:grid;grid-template-rows:minmax(0,1fr) auto}
+.chat-workspace .thread{display:flex;flex-direction:column;max-height:none;padding:28px max(18px,calc((100% - 840px)/2)) 24px;scroll-padding-block:20px}
+.chat-footer{width:min(calc(100% - 32px),840px);margin:0 auto;padding:8px 0 max(16px,env(safe-area-inset-bottom));background:var(--bg)}
+.chat-composer{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:8px}
+.chat-composer textarea{field-sizing:content;resize:none;max-height:min(22vh,140px);min-width:0;min-height:38px;border:1px solid #4a4d55;border-radius:12px;background:var(--panel);padding:8px 11px;font-size:14px;line-height:20px;color:var(--text);outline:none}
+.chat-composer textarea:focus-visible{border-color:#85aa90;outline:none}
+.chat-composer .icon{width:38px;height:38px;min-height:38px;border-radius:11px}.chat-composer .line-icon{width:17px;height:17px}
+.chat-workspace .draft-action{padding-left:43px}
+.connection-actions,.card-actions{display:flex;align-items:center;gap:8px}
+
+.linkedin-mark{width:25px;height:25px;display:grid;place-items:center;background:#0a66c2;border-radius:5px;color:white}
+.linkedin-mark svg{width:17px;height:17px}
+.post-card{display:flex;flex-direction:column}.post-revision{padding:4px 20px 17px;margin-top:auto}.post-revision .icon{width:39px;min-height:39px}
+.revise-form{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:7px}
+.revision-error{color:var(--coral);margin-top:6px;font-size:13px}
+.filter-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:15px;gap:12px}
+.filter-toolbar p{overflow-wrap:anywhere}
+.popup{width:min(430px,calc(100vw - 28px));max-height:min(620px,calc(100dvh - 32px));color:var(--text);background:var(--panel);border:1px solid #545961;border-radius:22px;padding:20px;box-shadow:0 18px 60px #0007;overflow:auto}
+.popup::backdrop{background:#080b10a1}
+.popup h2{font-size:24px}.popup-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+.popup-form{display:grid;gap:16px}.post-options{max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:11px;padding:6px}
+.filter-option{display:flex;align-items:center;gap:8px;padding:7px 6px;font-weight:400;overflow-wrap:anywhere}
+.filter-option input{accent-color:var(--mint);flex:none}
+.popup-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
+.scheduled-editor,.revision-panel{display:grid;gap:13px;padding:17px;border:1px solid var(--line);border-radius:17px;background:var(--panel);margin-bottom:12px}
+.revision-panel h2{font-size:22px}.revision-panel .thread{max-height:230px}
+.danger{background:#3b2629;border-color:#805759;color:#ffd7d2}
+.calendar-note{margin-top:14px}.calendar-day .calendar-date{display:block;cursor:default}
+@media(max-width:520px){.header{grid-template-columns:max-content 1fr max-content}.header.entry{grid-template-columns:1fr auto 1fr}.wordmark{justify-self:center}.wordmark svg{height:27px}.nav .icon{width:31px}.connection-actions{gap:5px}
+}
+
+.filter-popup{position:fixed;inset:auto;margin:0;width:min(310px,calc(100vw - 24px));max-height:min(365px,calc(100dvh - 24px));padding:13px;border-radius:15px;box-shadow:0 10px 28px #0006;overscroll-behavior:contain}
+.filter-popup::backdrop{background:transparent;pointer-events:none}
+.filter-popup h2{font-size:19px}.filter-popup .popup-head{margin-bottom:9px}.filter-popup .popup-form{gap:10px}
+.filter-popup .popup-head .icon{width:30px;min-height:30px}.filter-popup .popup-head .line-icon{width:16px;height:16px}
+.filter-popup .post-options{max-height:120px}.filter-popup .popup-actions{margin-top:1px}
+.filter-popup:popover-open{animation:filter-enter .16s ease-out both;transform-origin:top right}
+.screen-enter{animation:screen-enter .2s ease-out both}
+.reply-enter{animation:reply-enter .25s cubic-bezier(.2,.7,.3,1) both}
+.analytics-grid .bars i{transform-origin:bottom;animation:metric-grow .32s ease-out both}
+.analytics-grid .bars i:nth-child(2n){animation-delay:.035s}
+@keyframes filter-enter{from{opacity:0;transform:translateY(-4px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes screen-enter{from{opacity:.78;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes reply-enter{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+@keyframes metric-grow{from{transform:scaleY(.15);opacity:.36}to{transform:scaleY(1);opacity:.85}}
+@media(prefers-reduced-motion:reduce){.filter-popup:popover-open,.screen-enter,.reply-enter,.analytics-grid .bars i{animation:none}}
+</style>
+</head>
+<body>
+<header id="header" class="header entry"><nav id="nav" class="nav" aria-label="Workspace" hidden></nav><div class="wordmark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 101 32" width="101" height="32" role="img" aria-label="Lens">
+  <defs>
+    <linearGradient id="lens-glass" x1="0%" x2="100%" y1="0%" y2="100%" gradientUnits="objectBoundingBox">
+      <stop stop-color="#C6E2FD" stop-opacity=".18"/>
+      <stop offset=".53" stop-color="#B8D8E7" stop-opacity=".09"/>
+      <stop offset="1" stop-color="#E4F9FF" stop-opacity=".37"/>
+    </linearGradient>
+    <linearGradient id="lens-edge" x1="0%" x2="100%" y1="0%" y2="100%" gradientUnits="objectBoundingBox">
+      <stop stop-color="#EAF9FF" stop-opacity=".91"/>
+      <stop offset=".55" stop-color="#AACCDC" stop-opacity=".48"/>
+      <stop offset="1" stop-color="#EBF9FF" stop-opacity=".82"/>
+    </linearGradient>
+    <radialGradient id="lens-glint" cx=".26" cy=".23" r=".58">
+      <stop stop-color="#F5FCFF" stop-opacity=".29"/>
+      <stop offset=".72" stop-color="#F5FCFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g id="lens-glass-mark">
+    <g transform="rotate(-24 13.2 15.7)">
+      <ellipse cx="13.2" cy="15.7" rx="9.7" ry="11.3" fill="url(#lens-glass)" stroke="url(#lens-edge)" stroke-width="1.1"/>
+      <ellipse cx="13.2" cy="15.7" rx="8.65" ry="10.2" fill="url(#lens-glint)"/>
+    </g>
+    <g transform="rotate(24 26 16.7)">
+      <ellipse cx="26" cy="16.7" rx="9.7" ry="11.3" fill="url(#lens-glass)" stroke="url(#lens-edge)" stroke-width="1.1"/>
+      <ellipse cx="26" cy="16.7" rx="8.65" ry="10.2" fill="url(#lens-glint)"/>
+    </g>
+  </g>
+  <path fill="#F6F4EE" d="M45.938 24V4.673H49.643V24ZM59.897 19.544 63.589 20.164Q62.877 22.194 61.341 23.255Q59.805 24.316 57.498 24.316Q53.846 24.316 52.093 21.93Q50.708 20.019 50.708 17.105Q50.708 13.625 52.528 11.654Q54.347 9.683 57.129 9.683Q60.253 9.683 62.059 11.746Q63.866 13.809 63.787 18.067H54.505Q54.545 19.715 55.402 20.632Q56.259 21.548 57.538 21.548Q58.408 21.548 59.001 21.073Q59.594 20.599 59.897 19.544ZM60.108 15.8Q60.069 14.191 59.278 13.354Q58.487 12.517 57.353 12.517Q56.14 12.517 55.349 13.4Q54.558 14.284 54.571 15.8ZM77.891 24H74.186V16.854Q74.186 14.587 73.949 13.921Q73.712 13.255 73.178 12.886Q72.644 12.517 71.892 12.517Q70.93 12.517 70.165 13.044Q69.401 13.572 69.117 14.442Q68.834 15.312 68.834 17.659V24H65.129V9.999H68.57V12.056Q70.403 9.683 73.184 9.683Q74.41 9.683 75.426 10.124Q76.441 10.566 76.961 11.251Q77.482 11.937 77.687 12.807Q77.891 13.677 77.891 15.299ZM78.693 20.005 82.411 19.438Q82.648 20.52 83.373 21.08Q84.098 21.64 85.404 21.64Q86.841 21.64 87.566 21.113Q88.053 20.744 88.053 20.124Q88.053 19.702 87.79 19.425Q87.513 19.162 86.55 18.938Q82.068 17.949 80.868 17.131Q79.207 15.998 79.207 13.98Q79.207 12.161 80.644 10.922Q82.081 9.683 85.1 9.683Q87.974 9.683 89.372 10.619Q90.769 11.555 91.297 13.387L87.803 14.033Q87.579 13.216 86.953 12.781Q86.326 12.346 85.166 12.346Q83.703 12.346 83.07 12.754Q82.648 13.044 82.648 13.506Q82.648 13.901 83.017 14.178Q83.518 14.547 86.478 15.22Q89.438 15.892 90.611 16.868Q91.771 17.856 91.771 19.623Q91.771 21.548 90.163 22.932Q88.554 24.316 85.404 24.316Q82.543 24.316 80.875 23.156Q79.207 21.996 78.693 20.005ZM93.364 24V20.295H97.069V24Z"/>
+</svg></div><button id="settings-nav" class="icon ghost settings-nav" data-action="settings" aria-label="Settings" title="Settings" hidden></button></header>
+<main id="main"></main>
+<div id="notice" role="status" hidden></div>
+<script>
+'use strict';
+const STORAGE_KEY = 'lens-founder-demo-v2';
+const PROVIDERS = ['Canva', 'Sculptex', 'LinkedIn'];
+const QUESTIONS = [
+  ['product', 'What does your company do?'],
+  ['audience', 'Who do you want to reach?'],
+  ['goal', 'What do you want your posts to achieve?'],
+  ['cadence', 'How often should Lens post? For example, 3 times a week.'],
+  ['voice', 'How should your posts sound? You can also mention topics to avoid.']
+];
+const SOURCE = 'https://arclight.events/event/creator-economy-hack-powered-by-you-com-1b12ws';
+const INITIAL = {brand:null, onboarding:null, connections:{}, posts:[], journal:[], brainstorm:[], proposal:null, next:1};
+function loadState() {
+  try {return {...structuredClone(INITIAL),...JSON.parse(localStorage.getItem(STORAGE_KEY)||'{}')};}
+  catch {return structuredClone(INITIAL);}
+}
+let state = loadState();
+delete state.auto;
+delete state.onboardingRevision;
+delete state.restartOnboarding;
+let view = state.onboarding ? 'onboard' : state.brand ? 'review' : 'entry';
+let revising = false;
+let revisionError = '';
+let selectedPostId = null;
+let editing = false;
+let drag = null;
+let timer;
+let decisionPending = false;
+let analyticsPost = 'all';
+let analyticsRange = 7;
+let calendarWeek;
+let scheduleDragId = null;
+const SCAN_DELAY = 2650;
+const main = document.querySelector('#main');
+const header = document.querySelector('#header');
+const notice = document.querySelector('#notice');
+const nav = document.querySelector('#nav');
+const settingsNav = document.querySelector('#settings-nav');
+const ICONS = {
+  analytics:'<path d="M4 19h16M7 15v-4m5 4V6m5 9V9"/>',
+  chat:'<path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l1.6-3.2A7.5 7.5 0 1 1 20 11.5Z"/><path d="M9 11.5h6"/>',
+  previous:'<path d="M19 12H5m6-6-6 6 6 6"/>',
+  next:'<path d="M5 12h14m-6-6 6 6-6 6"/>',
+  calendar:'<rect x="4" y="6" width="16" height="14" rx="2"/><path d="M8 4v4m8-4v4M4 11h16m-12 4h2m4 0h2"/>',
+  settings:'<path d="m10 3-.6 2.4-1.8 1L5.2 5.7 3.3 9l1.8 1.7v2.1L3.3 14.5l1.9 3.3 2.4-.7 1.8 1 .6 2.4h3.9l.6-2.4 1.8-1 2.4.7 1.9-3.3-1.8-1.7v-2.1L20.6 9l-1.9-3.3-2.4.7-1.8-1-.6-2.4z"/><circle cx="12" cy="11.8" r="3.1"/>',
+  filter:'<path d="M4 6h16l-6 7v4l-4 2v-6z"/>',
+  linkedin:'<path fill="currentColor" stroke="none" d="M4 8.8h3.6V20H4zm1.8-5.4a2.1 2.1 0 1 1 0 4.2 2.1 2.1 0 0 1 0-4.2zM10 8.8h3.5v1.5a3.8 3.8 0 0 1 3.4-1.7c3 0 3.8 1.9 3.8 4.5V20h-3.6v-6.1c0-1.4-.3-2.3-1.6-2.3-1.4 0-1.9 1-1.9 2.3V20H10z"/>',
+  edit:'<path d="m5 16-1 4 4-1L19 8l-3-3L5 16Zm8-8 3 3"/>',
+  approve:'<path d="m5 12 4 4L19 6"/>',
+  decline:'<path d="m7 7 10 10M17 7 7 17"/>',
+  send:'<path d="M12 19V5m-5 5 5-5 5 5"/>',
+  link:'<path d="M9 15l6-6m-7 4H7a3 3 0 0 1 0-6h4m2 4h4a3 3 0 0 1 0 6h-4"/>',
+  layers:'<path d="m12 4 8 5-8 5-8-5 8-5Zm-8 9 8 5 8-5"/>',
+  globe:'<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4a12 12 0 0 1 0 16 12 12 0 0 1 0-16Z"/>'
+};
+function icon(name) {
+  return `<svg class="line-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+}
+nav.innerHTML = [['review','Stack','layers'],['analytics','Analytics'],['chat','Chat'],['calendar','Calendar']].map(([id,label,glyph=id])=>
+  `<button class="icon ghost" data-action="${id}" aria-label="${label}" title="${label}">${icon(glyph)}</button>`).join('');
+settingsNav.innerHTML = icon('settings');
+
+
+function save() {
+  try {localStorage.setItem(STORAGE_KEY,JSON.stringify(state));}
+  catch {notify('This session is active. Browser storage is unavailable.');}
+}
+function esc(value = '') {
+  return String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+}
+function notify(message) {
+  clearTimeout(timer);
+  notice.textContent = message;
+  notice.hidden = false;
+  timer = setTimeout(()=>{notice.hidden = true;},4700);
+}
+function go(next) {
+  view = next;
+  editing = false;
+  revising = false;
+  revisionError = '';
+  drag = null;
+  render();
+  main.firstElementChild?.classList.add('screen-enter');
+  (main.querySelector('h1') || main.querySelector('.chat-composer textarea'))?.focus({preventScroll:true});
+}
+function heading(title,detail='',back=true) {
+  return `<div class="page-head">${back?'<div><button class="btn ghost" data-action="review">← Back to posts</button></div>':''}<h1 tabindex="-1">${title}</h1>${detail?`<p class="muted">${detail}</p>`:''}</div>`;
+}
+function entryPage() {
+  return `<section class="entry-page"><form id="entry-form" class="entry-form" novalidate><label for="site">Your company URL</label><div class="url-bar"><span class="url-dot" aria-hidden="true"></span><input id="site" name="site" type="text" inputmode="url" autocomplete="url" placeholder="yourcompany.com" required><button class="icon round primary" type="submit" aria-label="Send URL">${icon('send')}</button></div><p class="entry-error" role="alert" id="entry-error"></p></form></section>`;
+}
+function scanPage() {
+  const domain = esc(state.onboarding.name);
+  return `<section class="scan-page" aria-labelledby="scan-title">
+    <div class="scan-stage" aria-hidden="true">
+      <span class="scan-token behind" style="--x:15%;--y:61%;--delay:-.3s">/about</span>
+      <span class="scan-token behind icon-token" style="--x:56%;--y:21%;--delay:-.9s">${icon('layers')}</span>
+      <div class="scan-lenses"><div class="glass-lens"></div><div class="glass-lens second"></div></div>
+      <span class="scan-token" style="--x:15%;--y:28%">${domain}</span>
+      <span class="scan-token icon-token" style="--x:38%;--y:59%;--delay:-.6s">${icon('link')}</span>
+      <span class="scan-token" style="--x:66%;--y:49%;--delay:-.2s">/product</span>
+      <span class="scan-token" style="--x:53%;--y:73%;--delay:-1s">/blog</span>
+      <span class="scan-token icon-token" style="--x:78%;--y:19%;--delay:-.5s">${icon('globe')}</span>
+    </div>
+    <div class="scan-status" role="status">
+      <h1 id="scan-title" tabindex="-1">Looking at ${domain}</h1>
+      <p class="muted">Previewing a website scan for the demo.</p>
+      <div class="scan-progress" aria-hidden="true"></div>
+    </div>
+  </section>`;
+}
+function chatTurn(role,content) {
+  return `<div class="turn ${role}">${role==='agent'?'<span class="mini-logo" aria-label="Lens"><svg viewBox="0 0 39 32" aria-hidden="true"><use href="#lens-glass-mark"/></svg></span>':''}<div class="bubble">${esc(content)}</div></div>`;
+}
+function chatComposer(id,placeholder) {
+  return `<form id="${id}" class="chat-composer"><textarea rows="1" name="message" aria-label="Message" placeholder="${placeholder}" maxlength="1200" required></textarea><button class="icon primary" type="submit" aria-label="Send message">${icon('send')}</button></form>`;
+}
+function chatWorkspace(label,logLabel,thread,footer) {
+  return `<section class="chat-workspace" aria-label="${label}">
+    <div class="thread" role="log" aria-label="${logLabel}">${thread}</div>
+    <div class="chat-footer">${footer}</div></section>`;
+}
+
+function connectionRows() {
+  return `<div class="connections">${PROVIDERS.map(provider=>{
+    const connected = Boolean(state.connections[provider]);
+    const status = connected ? (provider==='LinkedIn'?'Connected':'Connected in demo') : 'Disconnected';
+    return `<div class="connection"><div><strong>${provider}</strong><small>${status}</small></div>
+      <div class="connection-actions"><button class="btn ${connected?'ghost':'primary'}" data-action="connection" data-provider="${provider}">${connected?'Disconnect':'Connect'}</button></div></div>`;
+  }).join('')}</div>`;
+}
+function onboardPage() {
+  const setup = state.onboarding;
+  const complete = setup.index>=QUESTIONS.length;
+  const messages = setup.messages.map(m=>chatTurn(m.role,m.role==='agent'?m.text.replace(' LinkedIn is in demo mode while publishing access is pending.',''):m.text)).join('');
+  const thread = messages+(complete?connectionRows():'');
+  const footer = complete
+    ? '<div class="onboard-actions"><button class="btn primary" data-action="finish-onboard">Save brand &amp; open posts →</button></div>'
+    : chatComposer('onboard-form','Reply to Lens')+'<div class="onboard-actions"><button class="btn ghost" type="button" data-action="skip-onboard">Skip to posts →</button></div>';
+  return chatWorkspace('Onboarding','Onboarding conversation',thread,footer);
+}
+function postCard(post) {
+  return `<article class="post-card" id="post-card" aria-label="Draft post">
+  <header class="post-meta"><span class="linkedin-mark" role="img" aria-label="LinkedIn draft">${icon('linkedin')}</span><button class="icon ghost round" data-action="edit" aria-label="Edit post" title="Edit post">${icon('edit')}</button></header>
+  <div class="post-body">${editing?`<form class="settings-grid" id="edit-form"><label class="form-label">Headline<input class="field" name="title" maxlength="180" value="${esc(post.title)}" required></label><label class="form-label">Post copy<textarea class="field" name="copy" rows="4" maxlength="3000" required>${esc(post.copy)}</textarea></label><div class="tools"><button class="btn primary" type="submit">Save edit</button><button class="btn ghost" data-action="cancel-edit" type="button">Cancel</button></div></form>`:
+  `<h2>${esc(post.title)}</h2><div class="post-copy">${esc(post.copy)}</div>${post.visual?`<div class="post-visual"><strong>${esc(state.brand.name)}</strong><div class="visual-orb" aria-hidden="true"></div></div>`:''}${post.source?`<a href="${SOURCE}" target="_blank" rel="noopener">Creator Economy Hack · Event source ↗</a>`:''}`}</div>
+  ${editing?'':`<div class="post-revision">${revising?revisionComposer('revise-form',post.id):`<button class="icon ghost round" data-action="revise" title="Suggest a revision" aria-label="Suggest a revision">${icon('chat')}</button>`}</div>`}
+  <div class="swipe-overlay" aria-hidden="true"><span id="swipe-mark"></span></div></article>`;
+}
+
+function reviewPage() {
+  const post = state.posts[0];
+  if (!post) return `<section class="empty-review"><div class="empty-content">
+    <span class="empty-check">${icon('approve')}</span><h1 tabindex="-1">You’re all caught up</h1>
+    <button class="btn primary" data-action="generate">Generate more</button></div></section>`;
+  return `<section class="review"><div class="review-top"><h1 tabindex="-1">Post review</h1><span>${state.posts.length} in stack</span></div>
+    <div class="stack ${state.posts.length>1?'has-next':''}">${postCard(post)}</div>${editing?'':`<div class="decisions">
+      <button id="decline" class="icon decision decline" data-action="decline" aria-label="Decline post" title="Decline">${icon('decline')}</button>
+      <button id="approve" class="icon decision approve" data-action="approve" aria-label="Approve and schedule post" title="Approve and schedule">${icon('approve')}</button>
+    </div><p class="review-hint">Swipe left to decline or right to approve and schedule.</p>`}</section>`;
+}
+const DEMO_POSTS = [
+  {id:'launch',title:'Introducing Lens',metrics:[1461,98,54,26]},
+  {id:'feedback',title:'What we heard from founders',metrics:[949,66,29,16]}
+];
+const METRIC_LABELS = ['Post views','Likes','Link clicks','Followers gained'];
+function insightPage() {
+  const selection = analyticsPost === 'all' ? DEMO_POSTS : DEMO_POSTS.filter(post=>post.id===analyticsPost);
+  const scale = {7:1,14:1.7,30:2.8}[analyticsRange];
+  const bars = [9,18,15,26,33,29,40];
+  const metrics = METRIC_LABELS.map((name,i)=>{
+    const count = Math.round(selection.reduce((total,post)=>total+post.metrics[i],0)*scale);
+    return `<div class="metric"><span>${name}</span><strong>${count.toLocaleString('en-US')}</strong><div class="bars" aria-hidden="true">${bars.map((_,j)=>`<i style="height:${count ? Math.round(bars[(j+i+(analyticsRange===7?0:1))%7] * (selection.length===1?.8:1)) : 0}px"></i>`).join('')}</div></div>`;
+  }).join('');
+  const postOptions = [...DEMO_POSTS, ...state.journal.filter(item=>item.status==='Scheduled').map(post=>({...post,id:'scheduled-'+post.id,title:post.title+' (scheduled)'}))];
+  const allOptions = [{id:'all',title:'All sample posts'},...postOptions];
+  const selected = allOptions.find(post=>post.id===analyticsPost) || allOptions[0];
+  return `<section class="page">${heading('Analytics','LinkedIn · Sample metrics',false)}
+    <div class="filter-toolbar"><p class="muted">${esc(selected.title)} · Last ${analyticsRange} days</p>
+      <button class="icon ghost" data-action="filters" aria-label="Filter analytics" title="Filter analytics" aria-haspopup="dialog" popovertarget="filters-dialog">${icon('filter')}</button></div>
+    <div class="popup filter-popup" id="filters-dialog" popover="auto" role="dialog" aria-labelledby="filters-title"><div class="popup-head"><h2 id="filters-title">Filters</h2><button class="icon ghost" popovertarget="filters-dialog" popovertargetaction="hide" aria-label="Close filters">${icon('decline')}</button></div>
+      <form id="filters-form" class="popup-form">
+        <div><p id="posts-label"><strong>Post</strong></p><div class="post-options" role="radiogroup" aria-labelledby="posts-label">
+          ${allOptions.map(post=>`<label class="filter-option"><input type="radio" name="post" value="${esc(post.id)}" ${selected.id===post.id?'checked':''}>${esc(post.title)}</label>`).join('')}</div></div>
+        <label class="form-label">Date range<select name="range" class="field">${[7,14,30].map(days=>`<option value="${days}" ${analyticsRange===days?'selected':''}>Last ${days} days</option>`).join('')}</select></label>
+        <div class="popup-actions"><button class="btn primary" type="submit">Apply filters</button></div>
+      </form></div>
+    ${selection.length?`<div class="analytics-grid">${metrics}</div>`:'<p class="muted">Insights will appear after this post is published.</p>'}</section>`;
+}
+const DAY_MS = 86400000;
+const nyDate = new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'});
+const nyTime = new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+const dayLabel = new Intl.DateTimeFormat('en-US',{timeZone:'UTC',weekday:'short',month:'short',day:'numeric'});
+function dateKey(slot) {
+  const parts = Object.fromEntries(nyDate.formatToParts(slot).map(({type,value})=>[type,value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+function moveDay(day,amount) {return new Date(Date.parse(day+'T00:00:00Z')+amount*DAY_MS).toISOString().slice(0,10);}
+function dayOfWeek(day) {return new Date(day+'T00:00:00Z').getUTCDay();}
+function firstDay(day) {return moveDay(day,-dayOfWeek(day));}
+function easternSlot(day,time) {
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(day)||!/^\d{2}:\d{2}$/.test(time)) return null;
+  const utc = Date.parse(day+'T'+time+':00Z');
+  if(!Number.isFinite(utc)) return null;
+  for(const offset of [4,5]) {
+    const candidate = utc+offset*3600000;
+    if(dateKey(candidate)===day && nyTime.format(candidate)===time) return candidate;
+  }
+  return null;
+}
+function scheduledPosts() {return state.journal.filter(post=>post.status==='Scheduled').sort((a,b)=>a.slot-b.slot);}
+function recommendedSlot(day,ignoredId,earliest=Date.now()+1) {
+  const workday = ![0,6].includes(dayOfWeek(day));
+  const times = workday?['10:00','11:00','12:00','14:00','16:00','18:00','20:00']:['11:00','12:00','14:00','16:00','18:00','20:00'];
+  const booked = new Set(scheduledPosts().filter(post=>post.id!==ignoredId).map(post=>post.slot));
+  return times.map(time=>easternSlot(day,time)).find(slot=>slot!==null && slot>=earliest && !booked.has(slot)) ?? null;
+}
+
+function initializeCalendar() {
+  if(calendarWeek) return;
+  const now = Date.now();
+  const upcoming = scheduledPosts().find(post=>post.slot>now);
+  calendarWeek = firstDay(dateKey(upcoming?.slot || now));
+}
+function calendarPost(post) {
+  return `<button class="calendar-item" draggable="true" data-post-id="${post.id}" data-action="select-post" title="${esc(post.title)}">
+    <strong>${esc(post.title)}</strong></button>`;
+}
+function calendarPage() {
+  initializeCalendar();
+  const all = scheduledPosts();
+  const days = Array.from({length:7},(_,index)=>moveDay(calendarWeek,index));
+  return `<section class="page calendar-page">${heading('Calendar','LinkedIn schedule',false)}
+    <div class="calendar-header"><strong>${dayLabel.format(new Date(days[0]+'T00:00:00Z'))} – ${dayLabel.format(new Date(days[6]+'T00:00:00Z'))}</strong>
+      <div class="tools"><button class="icon ghost" data-action="previous-week" aria-label="Previous week" title="Previous week">${icon('previous')}</button><button class="btn ghost" data-action="calendar-today">Today</button><button class="icon ghost" data-action="next-week" aria-label="Next week" title="Next week">${icon('next')}</button></div>
+    </div>
+    <div class="calendar-scroll"><div class="calendar-week">${days.map(day=>`<div class="calendar-day" data-drop-day="${day}"><span class="calendar-date">${dayLabel.format(new Date(day+'T00:00:00Z'))}</span>${all.filter(post=>dateKey(post.slot)===day).map(calendarPost).join('')}</div>`).join('')}</div></div>
+    <p class="muted calendar-note">${all.length?'Drag a post to another day or open it to edit.':'Approved posts will appear here.'}</p></section>`;
+}
+function getScheduledPost(id) {return scheduledPosts().find(post=>post.id===id);}
+function scheduledPostPage() {
+  const post = getScheduledPost(selectedPostId);
+  if(!post) return calendarPage();
+  const conversation = post.revisionThread || [];
+  return `<section class="page"><div class="page-head"><div><button class="btn ghost" data-action="calendar">← Calendar</button></div><h1 tabindex="-1">Scheduled post</h1></div>
+    <form id="scheduled-edit" class="scheduled-editor">
+      <label class="form-label">Headline<input class="field" name="title" maxlength="180" value="${esc(post.title)}" required></label>
+      <label class="form-label">Post copy<textarea class="field" name="copy" rows="6" maxlength="3000" required>${esc(post.copy)}</textarea></label>
+      <label class="form-label">Date<input class="field" type="date" name="day" value="${dateKey(post.slot)}" required></label>
+      <div><button class="btn primary" type="submit">Save changes</button></div>
+    </form>
+    <div class="revision-panel"><h2>Revise with Lens</h2>
+      ${conversation.length?`<div class="thread" role="log" aria-label="Revision conversation">${conversation.map(turn=>chatTurn(turn.role,turn.text)).join('')}</div>`:''}
+      ${revisionComposer('scheduled-revise',post.id)}
+    </div></section>`;
+}
+function reschedulePost(id,day) {
+  const post = getScheduledPost(id);
+  if(!post || dateKey(post.slot)===day) return;
+  const slot = recommendedSlot(day,id);
+  if(!slot) {notify('Choose another day. No suggested time is available.');return;}
+  post.slot = slot;
+  calendarWeek = firstDay(day);
+  save();
+  render();
+  notify('Demo post moved to '+formatSlot(slot)+'.');
+}
+function saveScheduled(form) {
+  const post = getScheduledPost(selectedPostId);
+  const title = field(form,'title');
+  const copy = field(form,'copy');
+  const day = field(form,'day');
+  if(!post||!title||!copy||!day) return;
+  const slot = dateKey(post.slot)===day?post.slot:recommendedSlot(day,post.id);
+  if(!slot) {notify('Choose another day. No suggested time is available.');return;}
+  Object.assign(post,{title,copy,slot});
+  calendarWeek = firstDay(day);
+  save();
+  render();
+  notify('Scheduled post updated in the demo.');
+}
+function brainstormPage() {
+  const messages = state.brainstorm.length?state.brainstorm:[{role:'agent',text:`What would you like to post about for ${state.brand.name}?`}];
+  const draftAction = state.proposal?'<div class="draft-action"><button class="btn primary" data-action="queue-proposal">Add draft to stack</button></div>':'';
+  const thread = messages.map(m=>chatTurn(m.role,m.text)).join('')+draftAction;
+  return chatWorkspace('Chat','Brainstorm conversation',thread,chatComposer('brainstorm-form','Message Lens'));
+}
+function settingsPage() {
+  return `<section class="page">${heading('Settings', '', false)}
+  <div class="settings-block"><h2>Connections</h2><p class="muted">Manage your connections.</p>${connectionRows()}</div>
+  <div class="settings-block"><h2>Brand memory</h2><p class="muted">${esc(state.brand.name)} · ${esc(state.brand.cadence)} posts per week</p><div class="tools"><button class="btn" data-action="download">Download brand file</button><button class="btn" data-action="upload">Upload brand file</button><button class="btn" data-action="download-logo">Download logo</button><input id="brand-upload" aria-label="Upload brand file" type="file" accept=".json,application/json" hidden></div></div>
+  <div class="settings-block"><h2>Browser storage</h2><div class="tools"><button class="btn danger" data-action="request-erase">Erase local data</button></div></div>
+  <dialog id="erase-dialog" class="popup" aria-labelledby="erase-title"><div class="popup-head"><h2 id="erase-title">Erase local data?</h2></div><p>This clears your saved brand, drafts, schedule, chats, and demo connections from this browser and takes you back to onboarding.</p><div class="popup-actions"><button class="btn" data-action="cancel-erase" autofocus>Cancel</button><button class="btn danger" data-action="confirm-erase">Erase local data</button></div></dialog></section>`;
+}
+function render() {
+  const workspace = !['entry','scan','onboard'].includes(view);
+  header.classList.toggle('entry',!workspace);
+  nav.hidden = settingsNav.hidden = !workspace;
+  for(const button of header.querySelectorAll('[data-action]')) {
+    const active = button.dataset.action === (view==='scheduled-post'?'calendar':view);
+    button.classList.toggle('active',active);
+    if(active) button.setAttribute('aria-current','page');
+    else button.removeAttribute('aria-current');
+  }
+  const renderPage = {entry:entryPage,scan:scanPage,onboard:onboardPage,review:reviewPage,analytics:insightPage,calendar:calendarPage,'scheduled-post':scheduledPostPage,chat:brainstormPage,settings:settingsPage};
+  main.innerHTML = renderPage[view]();
+  const thread = main.querySelector('.thread');
+  if(thread) thread.scrollTop = thread.scrollHeight;
+}
+function normalizedUrl(value) {
+  try {
+    const input = value.trim();
+    const url = new URL(/^[a-z][a-z0-9+.-]*:/i.test(input)?input:'https://'+input);
+    if(!['http:','https:'].includes(url.protocol)||!url.hostname.includes('.')||url.username||url.password) return null;
+    return url;
+  } catch {return null;}
+}
+function startOnboard(value) {
+  const url = normalizedUrl(value);
+  if(!url) {document.querySelector('#entry-error').textContent='Enter a company website, like you.com.';return;}
+  const name = url.hostname.replace(/^www\./,'');
+  state.onboarding = {url:url.href,name,index:0,answers:{},messages:[
+    {role:'user',text:name},{role:'agent',text:`I’ll build a brand profile for ${name}. ${QUESTIONS[0][1]}`}
+  ]};
+  save();
+  go('scan');
+  const reduceMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  setTimeout(() => {
+    if (view === 'scan') go('onboard');
+  }, reduceMotion ? 950 : SCAN_DELAY);
+}
+function parseCadence(text) {
+  if (/\b(once|twice) (daily|a day)\b/i.test(text)) return /twice/i.test(text) ? 14 : 7;
+  if (/\b(daily|every day|a day|per day|month(?:ly)?)\b/i.test(text)) {
+    const daily = /^(?:once )?(?:daily|every day)$/.test(text.toLowerCase());
+    return daily ? 7 : null;
+  }
+  if (/\bevery (?:other|second) day\b/i.test(text)) return 3;
+  if (/\btwice\b/i.test(text)) return 2;
+  const match = text.toLowerCase().match(/\b(\d+|one|two|three|four|five|six|seven)\b/);
+  const numbers = {one:1,two:2,three:3,four:4,five:5,six:6,seven:7};
+  const number = match ? numbers[match[1]] ?? Number(match[1]) : /\b(weekly|once a week)\b/i.test(text) ? 1 : null;
+  return Number.isInteger(number) && number>=1 && number<=14 ? number : null;
+}
+function onboardAnswer(value) {
+  const setup = state.onboarding;
+  const question = QUESTIONS[setup.index];
+  if(!question) return;
+  const [key] = question;
+  setup.messages.push({role:'user',text:value});
+  const vague = /^(idk|i don.t know|not sure|no idea|n\/a|none|anything)[.!]?$/i.test(value);
+  const answer = key==='cadence'?parseCadence(value):value;
+  if(!answer || (key!=='cadence' && key!=='voice' && (value.length<4 || vague))) {
+    const clarification = {product:'What does the product help customers do? A short sentence is enough.',audience:'Can you name a group, such as early-stage founders or local restaurant owners?',goal:'Pick a concrete goal, such as finding early users, sharing progress, or building awareness.',cadence:'How many posts per week should I plan for? Pick a number from 1 to 14.'};
+    setup.messages.push({role:'agent',text:clarification[key]});
+  } else {
+    setup.answers[key] = answer;
+    setup.index++;
+    setup.messages.push({role:'agent',text:QUESTIONS[setup.index]?.[1] || 'I have enough to save your brand. Connect Canva for design, Sculptex for 3D visuals, and LinkedIn for scheduling, or continue without connecting.'});
+  }
+  save();
+  render();
+  (main.querySelector('#onboard-form textarea') || main.querySelector('[data-action=finish-onboard]'))?.focus();
+}
+function newPost(title,copy,extras={}) {
+  return {id:state.next++,title,copy,...extras};
+}
+function finishOnboard(skipped = false) {
+  const setup = state.onboarding;
+  if(!setup || (!skipped && setup.index!==QUESTIONS.length)) return;
+  const demoDefaults = {
+    product:'Here’s a look at what we’re working on.',
+    audience:'founders and early users',
+    goal:'Share our progress and get feedback.',
+    cadence:3,
+    voice:'Clear and conversational'
+  };
+  state.brand = {
+    name:setup.name,url:setup.url,
+    ...(skipped ? {...demoDefaults,onboardingSkipped:true} : {}),
+    ...setup.answers
+  };
+  const brand = state.brand;
+  const hackathon = /hackathon|creator economy hack/i.test(brand.goal);
+  const title = hackathon?'What we’re building at Creator Economy Hack':`What we’re building at ${brand.name}`;
+  const angle = hackathon?'We’re building at Creator Economy Hack and sharing what we learn along the way.':`Here’s what we’re working on at ${brand.name}.`;
+  const seedStack = !state.posts.length;
+  if(seedStack) state.posts.push(newPost(title,`${angle}\n\n${brand.product}\n\nIf you’re part of this community, we’d like to hear what you would try first.`,{source:hackathon,visual:Boolean(state.connections.Sculptex)}));
+  if(seedStack) state.posts.push(newPost('A question for our early users',`We’re building for ${brand.audience}. What’s one thing about your current workflow you wish took half as long?\n\nYour feedback will help us decide what to focus on next.`));
+  state.onboarding = null;
+  save();
+  go('review');
+  notify(skipped?'Posts ready. Demo defaults filled in unanswered questions.':'Brand memory saved.');
+}
+const eastern = new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',dateStyle:'medium',timeStyle:'short'});
+function formatSlot(slot) {return eastern.format(new Date(slot))+' ET';}
+function schedule(post) {
+  const interval = Math.round(7*86400000/state.brand.cadence);
+  const last = Math.max(0,...state.journal.filter(item=>item.status==='Scheduled').map(item=>item.slot));
+  const earliest = Math.max(Date.now()+3600000,last+interval);
+  let day = dateKey(earliest);
+  let slot = recommendedSlot(day,post.id,earliest);
+  while(slot===null) {
+    day = moveDay(day,1);
+    slot = recommendedSlot(day,post.id,earliest);
+  }
+  state.journal.unshift({...post,status:'Scheduled',slot});
+  return slot;
+}
+function commitDecision(approve, id) {
+  decisionPending = false;
+  if(state.posts[0]?.id!==id) return;
+  const post = state.posts.shift();
+  if(approve) {
+    const slot = schedule(post);
+    notify('Scheduled in demo for '+formatSlot(slot)+'.');
+  } else {
+    state.journal.unshift({...post,status:'Declined'});
+    notify('Post declined.');
+  }
+  save();
+  drag = null;
+  revising = false;
+  revisionError = '';
+  render();
+}
+function decide(approve, card = main.querySelector('#post-card')) {
+  if(view!=='review'||editing||decisionPending||!state.posts.length) return;
+  drag = null;
+  const id = state.posts[0].id;
+  if(!card || globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    commitDecision(approve,id);
+    return;
+  }
+  decisionPending = true;
+  for(const action of ['approve','decline']) {document.querySelector('#'+action).disabled = true;}
+  const direction = approve ? 1 : -1;
+  paintSwipe(card,direction*170);
+  card.classList.add('exiting');
+  card.style.setProperty('--offset',direction*120+'vw');
+  card.style.setProperty('--tilt',direction*14+'deg');
+  setTimeout(()=>commitDecision(approve,id),280);
+}
+function generateMore() {
+  if(state.posts.length || decisionPending) return;
+  const {name,audience,product} = state.brand;
+  const angles = [
+    [`A behind-the-scenes note from ${name}`,`Here’s what we’re building for ${audience}.
+
+${product}
+
+What part of the process would you like us to show next?`],
+    ['What would make your work easier?',`We’re listening to ${audience}. Which part of your workflow deserves a simpler tool?
+
+We’d like to hear what you’ve already tried.`],
+    ['One question for our community',`If you could change one thing about the way you work today, what would it be? We’re collecting ideas from ${audience} as we build at ${name}.`]
+  ];
+  const [title,copy] = angles[(state.next-1)%angles.length];
+  state.posts.push(newPost(title,copy,{visual:Boolean(state.connections.Sculptex)}));
+  save();
+  render();
+  notify('New demo draft added to your stack.');
+}
+function brainstorm(value) {
+  const {name,audience,product} = state.brand;
+  const topic = value.replace(/\s+/g,' ').trim();
+  const pending = state.proposal;
+  const isRevision = /^(?:(?:please|can you)\s+)?(?:make (?:it|this)\b|shorten\b|trim\b|tighten\b|replace\b|remove\b|include\b|add\b|end with\b)/i.test(topic);
+  let reply;
+  if(/^(?:hi|hey|hello|good morning|good afternoon|thanks|thank you|help)[!.? ]*$/i.test(topic) || topic.length<4) {
+    if(pending) reply = 'I can refine the draft above or start a new one. What would you like to change?';
+    else reply = 'What should the post be about? Try a customer insight, a product update, or something you learned this week.';
+  } else if(pending && isRevision) {
+    const request = topic.replace(/^(?:please|can you)\s+/i,'');
+    const revision = reviseCopy(pending.copy,request);
+    if(revision.copy && revision.copy.length<=3000) {
+      pending.copy = revision.copy;
+      reply = revision.message+'\n\n'+pending.copy;
+    } else {
+      reply = revision.copy ? 'That change would make the draft too long.' : revision.message;
+    }
+  } else {
+    const title = topic.length>96?topic.slice(0,93)+'…':topic;
+    const copy = `${topic}\n\nAt ${name}, we’re building for ${audience}. ${product}\n\nWhat would you add to the conversation?`;
+    state.proposal = {title,copy,visual:Boolean(state.connections.Sculptex)};
+    reply = 'Here’s a draft angle for your audience.\n\n'+copy;
+  }
+  if(!state.brainstorm.length) state.brainstorm.push({role:'agent',text:`Let’s find an angle for ${name}.`});
+  state.brainstorm.push({role:'user',text:value},{role:'agent',text:reply});
+  save();
+  render();
+  const turns = main.querySelectorAll('.thread .turn');
+  turns[turns.length-1]?.classList.add('reply-enter');
+  main.querySelector('#brainstorm-form textarea')?.focus();
+}
+function queueProposal() {
+  if(!state.proposal) return;
+  const {title,copy,visual} = state.proposal;
+  const post = newPost(title,copy,{visual});
+  state.proposal = null;
+
+  state.posts.push(post);
+  notify('Draft added to your stack.');
+  save();
+  render();
+}
+function downloadBrand() {
+  const connections = Object.fromEntries(PROVIDERS.map(provider=>[provider,Boolean(state.connections[provider])]));
+  const brandFile = {...state.brand,connections:{...connections,LinkedIn:connections.LinkedIn?'connected-demo':'demo'}};
+  downloadFile('lens-brand.json',JSON.stringify(brandFile,null,2)+'\n','application/json');
+}
+function downloadLogo() {
+  const logo = header.querySelector('.wordmark svg');
+  if(logo) downloadFile('Lens Logo.svg',new XMLSerializer().serializeToString(logo)+'\n','image/svg+xml');
+}
+function downloadFile(filename,content,type) {
+  const url = URL.createObjectURL(new Blob([content],{type}));
+  const link = Object.assign(document.createElement('a'),{href:url,download:filename});
+  link.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+function revisionComposer(id,postId) {
+  return `<form class="revise-form" id="${id}"><input type="hidden" name="post" value="${postId}"><input class="field" name="message" aria-label="Describe a change" placeholder="Suggest a change" maxlength="500" required><button class="icon primary round" type="submit" aria-label="Apply revision">${icon('send')}</button></form>
+    ${revisionError?`<p class="revision-error" role="alert">${esc(revisionError)}</p>`:''}`;
+}
+function reviseCopy(copy,request) {
+  const replace = request.match(/^replace\s+["“](.+?)["”]\s+with\s+["“](.+?)["”][.!]?$/i);
+  if(replace) {
+    if(!copy.includes(replace[1])) return {message:'That phrase wasn’t in the draft. Try copying the exact words to replace.'};
+    return {copy:copy.replace(replace[1],()=>replace[2]),message:'Replaced the phrase.'};
+  }
+  const add = request.match(/^(?:add|include|end with)\s+(.+)$/i);
+  if(add) {
+    const phrase = add[1].replace(/^["“](.*?)["”][.!]?$/,'$1');
+    return {copy:copy+'\n\n'+phrase,message:'Added your line to the draft.'};
+  }
+  const remove = request.match(/^remove\s+["“](.+?)["”][.!]?$/i);
+  if(remove) {
+    if(!copy.includes(remove[1])) return {message:'That phrase wasn’t in the draft.'};
+    return {copy:copy.replace(remove[1],'').replace(/ {2,}/g,' ').trim(),message:'Removed the phrase.'};
+  }
+  if(/shorter|shorten|concise|trim|tighten/i.test(request)) {
+    const paragraphs = copy.split(/\n\s*\n/).filter(Boolean);
+    const proposed = paragraphs.length>1
+      ? paragraphs.slice(0,-1).join('\n\n')
+      : copy.split(/(?<=[.!?])\s+/).slice(0,-1).join(' ');
+    const shortened = proposed || copy.split(/\s+/).slice(0,Math.ceil(copy.split(/\s+/).length*.72)).join(' ').replace(/[,;:]$/,'')+'.';
+    if(shortened.length>=copy.length) return {message:'This draft is already short. Try replacing a phrase.'};
+    return {copy:shortened,message:'Shortened the draft.'};
+  }
+  const tone = /friendl|casual|conversational|warmer/i.test(request) ? 'A quick update from our team.' :
+    /professional|formal/i.test(request) ? 'An update for our community.' : '';
+  if(tone) return {copy:tone+'\n\n'+copy.replace(/^(A quick update from our team\.|An update for our community\.)\s*/,''),message:'Updated the opening line.'};
+  return {message:'Try “make it shorter”, replace "old phrase" with "new phrase", or add a specific line.'};
+}
+function applyRevision(form) {
+  const request = field(form,'message');
+  const id = Number(field(form,'post'));
+  const scheduled = form.id==='scheduled-revise';
+  const post = scheduled?getScheduledPost(selectedPostId):state.posts[0];
+  if(!request||!post||post.id!==id||decisionPending) return;
+  const editor = scheduled?main.querySelector('#scheduled-edit'):null;
+  const headline = editor?.querySelector('[name=title]')?.value;
+  const date = editor?.querySelector('[name=day]')?.value;
+  const originalCopy = editor?.querySelector('[name=copy]')?.value.trim() || post.copy;
+  const result = reviseCopy(originalCopy,request);
+  const valid = result.copy && result.copy!==originalCopy && result.copy.length<=3000;
+  const feedback = valid ? result.message : result.copy?.length>3000 ? 'This edit would make the draft too long.' : result.copy ? 'That change is already in the draft.' : result.message;
+  if(valid) post.copy = result.copy;
+  revisionError = !scheduled&&!valid ? feedback : '';
+  if(scheduled) {
+    post.revisionThread = [...(post.revisionThread || []),{role:'user',text:request},{role:'agent',text:feedback}].slice(-16);
+  }
+  if(valid||scheduled) save();
+  render();
+  if(scheduled) {
+    if(headline!==undefined) main.querySelector('#scheduled-edit [name=title]').value = headline;
+    if(date!==undefined) main.querySelector('#scheduled-edit [name=day]').value = date;
+    if(!valid) {
+      const copyField = main.querySelector('#scheduled-edit [name=copy]');
+      if(copyField) copyField.value = originalCopy;
+    }
+  }
+  main.querySelector('#'+form.id+' input[name=message]')?.focus();
+  if(valid) notify('Draft updated.');
+}
+function positionFilters(button) {
+  const popup = main.querySelector('#filters-dialog');
+  if(!popup) return;
+  const rect = button.getBoundingClientRect();
+  const width = Math.min(310,window.innerWidth-24);
+  const height = Math.min(365,window.innerHeight-24);
+  const maxLeft = window.innerWidth-width-12;
+  popup.style.left = Math.max(12,Math.min(rect.right-width,maxLeft))+'px';
+  popup.style.top = Math.max(12,Math.min(rect.bottom+8,window.innerHeight-height-12))+'px';
+}
+function applyFilters(form) {
+  const nextPost = field(form,'post');
+  const nextRange = Number(field(form,'range'));
+  if(nextPost==='all'||DEMO_POSTS.some(post=>post.id===nextPost)||scheduledPosts().some(post=>'scheduled-'+post.id===nextPost)) analyticsPost=nextPost;
+  if([7,14,30].includes(nextRange)) analyticsRange=nextRange;
+  main.querySelector('#filters-dialog')?.hidePopover();
+  render();
+  main.querySelector('[data-action=filters]')?.focus();
+}
+function eraseLocalData() {
+  try {localStorage.removeItem(STORAGE_KEY);}
+  catch {notify('Browser storage could not be cleared.');return;}
+  state = structuredClone(INITIAL);
+  analyticsPost = 'all';
+  analyticsRange = 7;
+  calendarWeek = undefined;
+  selectedPostId = null;
+  scheduleDragId = null;
+  decisionPending = false;
+  go('entry');
+  notify('Lens data erased from this browser.');
+}
+async function importBrand(file) {
+  if(!file) return;
+  const currentState = state;
+  if(file.size>100000) {notify('Choose a Lens brand JSON file under 100 KB.');return;}
+  try {
+    const data = JSON.parse(await file.text());
+    if(state!==currentState || view!=='settings') return;
+    const keys = ['name','product','audience','goal','voice'];
+    const url = typeof data?.url==='string' ? normalizedUrl(data.url) : null;
+    if(!url || !keys.every(key=>typeof data[key]==='string' && data[key].trim() && data[key].length<=3000)
+      || !Number.isInteger(data.cadence) || data.cadence<1 || data.cadence>14) throw Error('Invalid brand file');
+    state.brand = {
+      ...Object.fromEntries(keys.map(key=>[key,data[key].trim()])),
+      url:url.href,cadence:data.cadence
+    };
+    save();
+    render();
+    notify('Brand file imported.');
+  } catch {notify('Choose a valid Lens brand JSON file.');}
+}
+function field(form,key) {return String(new FormData(form).get(key)||'').trim();}
+document.addEventListener('submit',event=>{
+  const form = event.target;
+  event.preventDefault();
+  if(form.id==='entry-form') startOnboard(field(form,'site'));
+  if(form.id==='onboard-form' && field(form,'message')) onboardAnswer(field(form,'message'));
+  if(form.id==='brainstorm-form' && field(form,'message')) brainstorm(field(form,'message'));
+  if(form.id==='scheduled-edit') saveScheduled(form);
+  if(['revise-form','scheduled-revise'].includes(form.id)) applyRevision(form);
+  if(form.id==='filters-form') applyFilters(form);
+  if(form.id==='edit-form' && state.posts[0] && field(form,'title') && field(form,'copy')) {
+    Object.assign(state.posts[0],{title:field(form,'title'),copy:field(form,'copy')});
+    editing = false;
+    save();
+    render();
+  }
+});
+document.addEventListener('click',event=>{
+  const button = event.target.closest('button[data-action]');
+  if(!button) return;
+  const {action,provider} = button.dataset;
+  if(['review','analytics','calendar','chat','settings'].includes(action) && state.brand) go(action);
+  if(action==='connection' && PROVIDERS.includes(provider)) {
+    state.connections[provider] = !state.connections[provider];
+    save();
+
+    render();
+    Array.from(main.querySelectorAll('button[data-provider]')).find(item=>item.dataset.provider===provider)?.focus();
+  }
+  if(action==='finish-onboard') finishOnboard();
+  if(action==='skip-onboard') finishOnboard(true);
+  if(action==='edit' && !editing && !decisionPending) {editing=true;render();main.querySelector('input[name="title"]')?.focus();}
+  if(action==='cancel-edit') {editing=false;render();}
+  if(action==='approve'||action==='decline') decide(action==='approve');
+  if(action==='queue-proposal') queueProposal();
+
+  if(action==='select-post') {
+    const id = Number(button.dataset.postId);
+    if(getScheduledPost(id)) {selectedPostId=id;go('scheduled-post');}
+  }
+  if(action==='calendar-today') {calendarWeek=firstDay(dateKey(Date.now()));render();}
+  if(action==='previous-week'||action==='next-week') {
+    calendarWeek=moveDay(calendarWeek,action==='previous-week'?-7:7);
+    render();
+    main.querySelector('[data-action='+action+']')?.focus();
+  }
+  if(action==='revise' && !decisionPending) {
+    revising=true;revisionError='';render();
+    main.querySelector('#revise-form input[name=message]')?.focus();
+  }
+  if(action==='filters') positionFilters(button);
+  if(action==='request-erase') main.querySelector('#erase-dialog')?.showModal();
+  if(action==='cancel-erase') main.querySelector('#erase-dialog')?.close();
+  if(action==='confirm-erase' && main.querySelector('#erase-dialog')?.open) eraseLocalData();
+  if(action==='upload') main.querySelector('#brand-upload')?.click();
+  if(action==='generate') generateMore();
+  if(action==='download') downloadBrand();
+  if(action==='download-logo') downloadLogo();
+});
+document.addEventListener('change',event=>{
+  if(event.target.id==='brand-upload') {
+    const file = event.target.files[0];
+    event.target.value = '';
+    importBrand(file);
+  }
+});
+function clearDropTargets() {
+  for(const target of main.querySelectorAll('.drop-target')) target.classList.remove('drop-target');
+}
+main.addEventListener('dragstart',event=>{
+  const item = event.target.closest('[data-post-id]');
+  if(view!=='calendar'||!item||!event.dataTransfer) return;
+  scheduleDragId = Number(item.dataset.postId);
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain',String(scheduleDragId));
+});
+main.addEventListener('dragover',event=>{
+  const target = event.target.closest('[data-drop-day]');
+  if(!target||scheduleDragId===null) return;
+  event.preventDefault();
+  clearDropTargets();
+  target.classList.add('drop-target');
+  if(event.dataTransfer) event.dataTransfer.dropEffect='move';
+});
+main.addEventListener('dragleave',event=>{
+  const target = event.target.closest('[data-drop-day]');
+  if(target && !target.contains(event.relatedTarget)) target.classList.remove('drop-target');
+});
+main.addEventListener('drop',event=>{
+  const target = event.target.closest('[data-drop-day]');
+  if(!target||scheduleDragId===null) return;
+  event.preventDefault();
+  const id = scheduleDragId;
+  scheduleDragId = null;
+  clearDropTargets();
+  reschedulePost(id,target.dataset.dropDay);
+});
+main.addEventListener('dragend',()=>{scheduleDragId=null;clearDropTargets();});
+function paintSwipe(card,delta) {
+  const strength = Math.min(0.65,Math.abs(delta)/180);
+  const color = delta<0?'#ffab9e':'#bdf4c6';
+  card.style.setProperty('--offset',delta+'px');
+  card.style.setProperty('--tilt',(delta/19)+'deg');
+  card.style.setProperty('--strength',strength);
+  card.style.setProperty('--tint',color);
+  card.querySelector('#swipe-mark').innerHTML = icon(delta<0?'decline':'approve');
+  for(const [id,direction] of [['decline',-1],['approve',1]]) {
+    const button = document.querySelector('#'+id);
+    const active = delta*direction>20;
+    button.classList.toggle('lit',active);
+    button.style.backgroundColor = active?`color-mix(in srgb, ${color} ${Math.round(strength*130)}%, var(--surface))`:'';
+    if(active) button.style.color = strength>.43?'#15181a':color;
+    else button.style.color = '';
+  }
+}
+main.addEventListener('pointerdown',event=>{
+  const card = event.target.closest('#post-card');
+  if(!card||editing||decisionPending||event.button!==0||event.target.closest('button,a,input,textarea,.post-revision')) return;
+  drag = {card,id:event.pointerId,x:event.clientX,delta:0};
+  card.setPointerCapture(event.pointerId);
+  card.classList.add('dragging');
+});
+main.addEventListener('pointermove',event=>{
+  if(!drag||drag.id!==event.pointerId) return;
+  drag.delta = event.clientX-drag.x;
+  paintSwipe(drag.card,drag.delta);
+});
+function endSwipe(event,commit) {
+  if(!drag||drag.id!==event.pointerId) return;
+  const {card,delta} = drag;
+  drag = null;
+  card.classList.remove('dragging');
+  if(commit && Math.abs(delta)>=Math.min(97,card.offsetWidth*.22)) decide(delta>0,card);
+  else paintSwipe(card,0);
+}
+main.addEventListener('pointerup',event=>endSwipe(event,true));
+main.addEventListener('pointercancel',event=>endSwipe(event,false));
+main.addEventListener('lostpointercapture',event=>endSwipe(event,false));
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape' && (main.querySelector('dialog[open]') || main.querySelector('#filters-dialog:popover-open'))) return;
+  if(event.key==='Enter' && event.target.matches?.('.chat-composer textarea') && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    event.target.form.requestSubmit();
+  }
+  if(event.key==='Escape' && view==='scheduled-post') go('calendar');
+  else if(event.key==='Escape' && editing) {editing=false;render();}
+  else if(event.key==='Escape' && revising) {revising=false;revisionError='';render();main.querySelector('[data-action=revise]')?.focus();}
+  else if(event.key==='Escape' && ['analytics','calendar','chat','settings'].includes(view)) go('review');
+});
+render();
+</script>
+</body>
+</html>
