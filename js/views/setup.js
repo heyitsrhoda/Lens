@@ -9,7 +9,7 @@ import * as demoModule from '../demo-data.js';
 // Used only if demo-data.js does not expose a company object under a known name.
 const FALLBACK_DEMO_COMPANY = {
   name: 'Sculptex',
-  url: 'https://sculptex-git-main-jacksonschorr.vercel.app',
+  url: 'https://sculptex.app',
   tagline: 'Precise 3D models from a sentence.',
   description:
     'Sculptex turns plain language into exact, parametric parts you can take straight into your slicer — editable CAD, not a blob mesh.',

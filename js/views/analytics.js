@@ -2,7 +2,7 @@
 // Data: state.linkedinFeed (mock LinkedIn activity), drafts, threads. All charts are inline SVG,
 // themed through CSS classes that use the design tokens (see css/views-d.css).
 import { html, useState, useEffect, useMemo, useRef } from '../lib.js';
-import { useStore } from '../store.js';
+import { useStore, liveFlags } from '../store.js';
 import { navigate } from '../router.js';
 import { Button, Empty, Icon, cx } from '../ui.js';
 
@@ -809,7 +809,7 @@ export default function Analytics() {
   const feed = useStore((s) => s.linkedinFeed) || EMPTY;
   const drafts = useStore((s) => s.drafts) || EMPTY;
   const threads = useStore((s) => s.threads) || EMPTY;
-  const demoMode = useStore((s) => !!(s.settings && s.settings.demoMode));
+  const demoMode = useStore((s) => liveFlags(s).demoMode);
   const [range, setRangeState] = useState(readRange);
   // Re-evaluate "now" every minute so simulated reach keeps growing while the page is open.
   const [now, setNow] = useState(() => Date.now());

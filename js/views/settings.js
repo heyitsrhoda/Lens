@@ -1,6 +1,6 @@
 // #/settings — Connections · Product · Data. The active tab lives in ?tab= (e.g. #/settings?tab=data).
 import { html, useState, useEffect, useMemo } from '../lib.js';
-import { useStore, setState, getState, resetState, toast } from '../store.js';
+import { useStore, setState, getState, resetState, toast, liveFlags } from '../store.js';
 import { navigate } from '../router.js';
 import { Button, Card, Badge, Modal, Tabs, Field, Input, TextArea, Toggle } from '../ui.js';
 import { analyzeProduct } from '../services/lens.js';
@@ -250,7 +250,7 @@ function clearEverything() {
 }
 
 function DataTab() {
-  const demoMode = useStore((s) => !(s.settings && s.settings.demoMode === false));
+  const demoMode = useStore((s) => liveFlags(s).demoMode);
   const counts = useStore((s) => [
     (s.threads || []).length,
     (s.drafts || []).length,
@@ -261,7 +261,7 @@ function DataTab() {
   const [confirm, setConfirm] = useState(null);
 
   function setDemo(on) {
-    setState((s) => ({ settings: { ...(s.settings || {}), demoMode: on } }));
+    setState((s) => ({ settings: { ...(s.settings || {}), demoMode: on, demoModeExplicit: true } }));
     toast(on ? 'Demo mode on — using sample data.' : 'Demo mode off — Lens uses You.com when a key (yours or the shared one) is available.', 'info');
   }
 

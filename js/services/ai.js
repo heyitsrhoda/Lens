@@ -146,10 +146,11 @@ async function completeWithYou({ system, messages, maxTokens, signal, webSearch 
 }
 
 /**
- * complete({ system, prompt | messages, maxTokens=1200, effort, signal, webSearch }) → assistant text.
+ * complete({ system, prompt | messages, maxTokens=1200, effort, signal, webSearch, provider }) → assistant text.
+ * `provider: 'you'` forces You.com regardless of settings (the chats always use You.com).
  */
-export async function complete({ system, messages, prompt, maxTokens = 1200, model, effort, signal, webSearch } = {}) {
-  const p = provider();
+export async function complete({ system, messages, prompt, maxTokens = 1200, model, effort, signal, webSearch, provider: forced } = {}) {
+  const p = forced === 'you' || forced === 'claude' ? forced : provider();
   if (p === 'claude') return claude.complete({ system, messages, prompt, maxTokens, model, effort, signal });
   const msgs = normalizeMessages(messages, prompt);
   const text = await completeWithYou({ system, messages: msgs, maxTokens, signal, webSearch });
@@ -164,8 +165,9 @@ function stripThinking(text) {
  * json({ system, prompt, schemaHint, maxTokens=2000, signal }) → parsed JSON.
  * Asks for JSON only, strips code fences, retries once with the parse error.
  */
-export async function json({ system, prompt, schemaHint, maxTokens = 2000, model, effort, signal } = {}) {
-  if (provider() === 'claude') return claude.json({ system, prompt, schemaHint, maxTokens, model, effort, signal });
+export async function json({ system, prompt, schemaHint, maxTokens = 2000, model, effort, signal, provider: forced } = {}) {
+  const p = forced === 'you' || forced === 'claude' ? forced : provider();
+  if (p === 'claude') return claude.json({ system, prompt, schemaHint, maxTokens, model, effort, signal });
   const sys = [
     system || 'You are a precise assistant.',
     'Respond with valid JSON only — no prose, no markdown fences, no commentary before or after.',

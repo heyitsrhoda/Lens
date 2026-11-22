@@ -2,7 +2,7 @@
 // No accounts. API keys live in localStorage; tool connections (Sculptex MCP, mock design tool,
 // mock LinkedIn) live in sessionStorage only. You.com is the default AI provider via ./api/you.
 import { html, useState, useEffect } from '../lib.js';
-import { useStore, setState, getState, toast, SCULPTEX_URL } from '../store.js';
+import { useStore, setState, getState, toast, SCULPTEX_URL, liveFlags } from '../store.js';
 import { Button, Card, Badge, Icon, Spinner } from '../ui.js';
 import * as mcp from '../services/mcp.js';
 import * as youcom from '../services/youcom.js';
@@ -43,8 +43,8 @@ function patchSettings(patch) {
 function saveKey(field, value) {
   const v = String(value || '').trim();
   const settings = getState().settings || {};
-  const turnOff = v && !settings[field] && settings.demoMode;
-  patchSettings(turnOff ? { [field]: v, demoMode: false } : { [field]: v });
+  const turnOff = v && !settings[field] && settings.demoModeExplicit && settings.demoMode;
+  patchSettings(turnOff ? { [field]: v, demoMode: false, demoModeExplicit: true } : { [field]: v });
   if (turnOff) toast('Demo mode turned off — using your keys.', 'info');
 }
 
@@ -549,7 +549,7 @@ function useYouStatus() {
 
 function YouCard() {
   const key = useStore((s) => (s.settings ? s.settings.youKey : '')) || '';
-  const demoMode = useStore((s) => !(s.settings && s.settings.demoMode === false));
+  const demoMode = useStore((s) => liveFlags(s).demoMode);
   const provider = useStore((s) => (s.settings && s.settings.aiProvider === 'claude' ? 'claude' : 'you'));
   const field = useStore((s) => (s.company && s.company.field) || '');
   const status = useYouStatus();
@@ -657,7 +657,7 @@ function YouCard() {
         html`<div className="cx-note">
           <${Icon} name="bolt" size=${14} />
           <span className="cx-note-grow">Demo mode is on, so Lens is still showing sample data.</span>
-          <${Button} variant="primary" size="sm" onClick=${() => { patchSettings({ demoMode: false }); toast('Live mode on — using You.com.', 'success'); }}>Go live<//>
+          <${Button} variant="primary" size="sm" onClick=${() => { patchSettings({ demoMode: false, demoModeExplicit: true }); toast('Live mode on — using You.com.', 'success'); }}>Go live<//>
         </div>`}
 
         <div className="row cx-actions">

@@ -28,7 +28,7 @@ function atLocal(now, dayOffset, hour, minute) {
 
 const company = {
   name: 'Sculptex',
-  url: 'https://sculptex-git-main-jacksonschorr.vercel.app',
+  url: 'https://sculptex.app',
   tagline: 'Precise 3D models from a sentence.',
   description:
     'Sculptex turns plain language into exact, parametric parts you can take straight into your slicer — editable CAD, not a blob mesh.',

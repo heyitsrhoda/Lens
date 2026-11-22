@@ -45,25 +45,33 @@ function publishStatus(st) {
 }
 
 /** GET ./api/you?op=status once → { ok, envKey, relay }. `relay:false` means no relay (static hosting / file://). */
+const STATUS_RETRY_MS = 10000;
+
+function statusFresh(st) {
+  // A reachable relay or a confirmed "no relay" (404 / file://) is final; a network error or timeout is retried.
+  return st && (st.relay || st.confirmed || Date.now() - (st.at || 0) < STATUS_RETRY_MS);
+}
+
 export function status({ force = false } = {}) {
-  if (!force && statusCache) return Promise.resolve(statusCache);
+  if (!force && statusFresh(statusCache)) return Promise.resolve(statusCache);
   if (!force && statusPromise) return statusPromise;
   statusPromise = (async () => {
-    let st = { ok: false, envKey: false, relay: false };
+    let st = { ok: false, envKey: false, relay: false, confirmed: isFileProtocol(), at: Date.now() };
     if (!isFileProtocol()) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 8000);
       try {
         const res = await fetch(`${RELAY_URL}?op=status`, { headers: { Accept: 'application/json' }, cache: 'no-store', signal: controller.signal });
         const body = res.ok ? await res.json().catch(() => null) : null;
-        if (body && body.ok) st = { ok: true, envKey: Boolean(body.envKey), relay: true };
+        if (body && body.ok) st = { ok: true, envKey: Boolean(body.envKey), relay: true, confirmed: true, at: Date.now() };
+        else if (res.status === 404) st = { ...st, confirmed: true };
       } catch {
         /* unreachable → relay:false */
       } finally {
         clearTimeout(timer);
       }
     }
-    statusCache = st;
+    statusCache = { ...st, at: Date.now() }; // retry window starts when the attempt finishes
     statusPromise = null;
     publishStatus(st);
     return st;
@@ -87,7 +95,7 @@ export function hasUserKey() {
 /** True when live You.com calls can be made: the user's own key, or an owner key on the server. */
 export function hasKey() {
   if (hasUserKey()) return true;
-  if (!statusCache && !statusPromise) status();
+  if (!statusPromise && !statusFresh(statusCache)) status();
   return Boolean(statusCache?.envKey);
 }
 

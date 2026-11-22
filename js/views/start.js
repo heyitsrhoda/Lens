@@ -2,7 +2,7 @@
 // Steps (persisted in state.onboarding.step so an OAuth redirect resumes in place):
 //   url → scanning (two glass lenses) → audience (chat) → connect → swipe (first posts)
 import { html, useState, useEffect, useMemo, useRef, useCallback } from '../lib.js';
-import { useStore, getState, setState, toast } from '../store.js';
+import { useStore, getState, setState, toast, liveFlags } from '../store.js';
 import { navigate } from '../router.js';
 import { Button, Badge, Icon, Spinner, SOURCE_META, hostname, cx } from '../ui.js';
 import {
@@ -32,7 +32,7 @@ export const START_STEPS = [
 ];
 const STEP_IDS = START_STEPS.map((s) => s.id);
 
-const DEMO_URL = (demo && demo.company && demo.company.url) || 'https://sculptex-git-main-jacksonschorr.vercel.app';
+const DEMO_URL = (demo && demo.company && demo.company.url) || 'https://sculptex.app';
 const DEMO_HOST = hostname(DEMO_URL);
 const MIN_SCAN_MS = 4500;
 const STATUS_MS = 1700;
@@ -607,6 +607,7 @@ function AudienceStep({ ob }) {
     patchOnboarding({ ready: false });
     try {
       const res = await onboardingChat(msg);
+      if (res && res.stale) return; // reply belonged to a previous URL
       const isReady = Boolean(res && res.ready);
       patchOnboarding({ ready: isReady });
       if (isReady) setArmed(true);
@@ -905,7 +906,7 @@ function ensureSuggestions() {
   const ob = s.onboarding || {};
   const runKey = ob.url || '';
   if (suggestedThisRun(s)) return Promise.resolve(null);
-  const demoMode = Boolean(s.settings && s.settings.demoMode);
+  const demoMode = liveFlags(s).demoMode;
   const hasSeeds = (s.drafts || []).some(isSeedSuggestion);
   // The curated Sculptex suggestions are this run's posts only for the Sculptex demo in demo mode.
   if (demoMode && hasSeeds && hostname(runKey) === DEMO_HOST) {

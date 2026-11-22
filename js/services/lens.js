@@ -4,7 +4,7 @@
 // settings.aiProvider) and falls back to demo data with a toast. Every LLM call goes through ai.js.
 // LinkedIn is MOCKED (no network). Sculptex is a real MCP server (see mcp.js).
 
-import { getState, setState, toast, uid, setLoading } from '../store.js';
+import { getState, setState, toast, uid, setLoading, liveFlags } from '../store.js';
 import { demo, replyTemplate, dmTemplate, postTemplate, altPostTemplate, postVisual } from '../demo-data.js';
 import * as you from './youcom.js';
 import * as ai from './ai.js';
@@ -58,13 +58,43 @@ function settings() {
 
 // Live AI = not in demo mode and the chosen provider is usable (You.com user key or the deployment's env key;
 // or aiProvider 'claude' with a Claude key).
+// Demo mode is automatic (live whenever You.com is reachable) unless the user set the toggle explicitly.
+function isDemo() {
+  const s = settings();
+  if (s.demoModeExplicit) return Boolean(s.demoMode);
+  const youReachable = you.hasKey() && you.cachedStatus()?.relay !== false;
+  return !youReachable && !(s.aiProvider === 'claude' && String(s.claudeKey || '').trim());
+}
+
 function canUseAI() {
-  return !settings().demoMode && ai.available();
+  return !isDemo() && ai.available();
 }
 
 // Live web search = not in demo mode and a You.com key (the user's, or the deployment's env key).
 function canUseYou() {
-  return !settings().demoMode && you.hasKey();
+  return !isDemo() && you.hasKey();
+}
+
+// The chats (drawer, onboarding audience chat, idea chat) are ALWAYS real You.com AI — never scripted.
+// Live whenever a You.com key exists (the user's own, or the deployment's YOU_API_KEY), regardless of demo mode.
+function canChatLive() {
+  return you.hasKey();
+}
+
+/** Honest assistant message when You.com can't answer (no relay / no key / API error). */
+function chatUnavailable(err, { plain = false } = {}) {
+  const msg = chatUnavailableText(err);
+  return plain ? msg.replace(/\*\*|`/g, '') : msg;
+}
+
+function chatUnavailableText(err) {
+  if (err?.code === 'no-relay' || (!err && !you.cachedStatus()?.relay && !you.hasUserKey())) {
+    return 'I can\'t reach You.com from here. The AI chat runs through the Lens server, so open Lens on its Vercel deployment (or run `python3 dev/serve.py` locally).';
+  }
+  if (!err) {
+    return 'I\'m not connected to You.com yet. Add your You.com API key in **Settings → Connections** (or set `YOU_API_KEY` on the Vercel project) and ask me again.';
+  }
+  return `You.com didn't answer that one (${String(err.message || err).slice(0, 160)}). Try again in a moment, or check your key in **Settings → Connections**.`;
 }
 
 // Wait for the relay status check (does the deployment hold an env key?) before deciding live vs demo.
@@ -87,7 +117,7 @@ export async function liveStatus() {
   const s = settings();
   return {
     live: canUseYou() || canUseAI(),
-    demoMode: Boolean(s.demoMode),
+    demoMode: isDemo(),
     search: canUseYou(),
     ai: canUseAI(),
     provider: ai.provider(),
@@ -473,11 +503,17 @@ export async function findConversations({ query } = {}) {
         incoming = null;
       }
     }
+    const live = Boolean(incoming);
     if (!incoming) {
       await delay();
       incoming = demoThreadsFor(query);
     }
-    const threads = mergeThreads(getState().threads, incoming);
+    // Live results replace the bundled sample conversations instead of mixing with them.
+    // Keep samples the founder acted on (saved/contacted) or that a draft still points at.
+    const referenced = new Set((getState().drafts || []).map((d) => d.threadId).filter(Boolean));
+    const seedIds = live && incoming.length ? new Set(demoList('threads').map((t) => t.id)) : null;
+    const existing = (getState().threads || []).filter((t) => !seedIds || !seedIds.has(t.id) || (t.status && t.status !== 'new') || referenced.has(t.id));
+    const threads = mergeThreads(existing, incoming);
     setState((s) => ({ threads, ui: { ...s.ui, lastRefresh: nowIso() } }));
     return threads;
   });
@@ -1390,46 +1426,6 @@ Encourage helpful, non-spammy outreach with honest founder disclosure.
 ${groundingContext()}`;
 }
 
-function demoChatAnswer(message) {
-  const s = getState();
-  const c = company();
-  const m = String(message || '').toLowerCase();
-  const threads = (s.threads || []).filter((t) => t.status !== 'dismissed').slice().sort((a, b) => (b.relevance || 0) - (a.relevance || 0));
-  const fresh = threads.filter((t) => t.status === 'new' || t.status === 'saved');
-  const groups = new Map();
-  for (const t of threads) if (t.painPoint) groups.set(t.painPoint, [...(groups.get(t.painPoint) || []), t]);
-  const clusters = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
-  const events = (s.events || []).slice().sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
-  const pending = (s.drafts || []).filter((d) => d.status === 'pending');
-  const scheduled = (s.drafts || []).filter((d) => d.status === 'scheduled');
-
-  if (/event|meetup|conference|week|attend|go to/.test(m)) {
-    if (!events.length) return 'No events are loaded yet. Hit Refresh on the Dashboard and I\'ll look for founder events this week.';
-    return `Here's what's worth your time this week:\n\n${events.slice(0, 4).map((e) => `- **${e.title}** — ${fmtWhen(e.start)}, ${e.location || e.format}. ${e.why || ''}`).join('\n')}\n\nNext step: pick one and bring a concrete example of ${c.name} solving "${clusters[0]?.[0] || 'a real user problem'}" — it's an easy conversation starter.`;
-  }
-  if (/post|write|content|linkedin|publish|share/.test(m)) {
-    const [label, list] = clusters[0] || [];
-    if (!label) return 'Once Lens has found a few conversations, I\'ll suggest a post built on the pain point that comes up most. Try Discover first.';
-    const q = list.find((t) => t.quote)?.quote;
-    return `Post about **${label}** — it came up in ${list.length} conversation${list.length === 1 ? '' : 's'}${list[0]?.community ? `, including ${list[0].community}` : ''}.${q ? `\n\nOne line that captures it: "${clip(q, 180)}"` : ''}\n\nAngle: open with that frustration in your own words, share what actually helps (tools aside), disclose you're building ${c.name}, and end with a question.${clusters[1] ? ` Runner-up topic: **${clusters[1][0]}** (${clusters[1][1].length}).` : ''}\n\nNext step: open Studio and draft from "${label}".`;
-  }
-  if (/reply|who|dm|reach|outreach|lead|contact|talk to|respond/.test(m)) {
-    const pick = (fresh.length ? fresh : threads).slice(0, 3);
-    if (!pick.length) return 'There are no open conversations yet. Run a search in Discover and I\'ll tell you who to reply to first.';
-    return `Start with these — they're the clearest fit and still uncontacted:\n\n${pick.map((t, i) => `${i + 1}. **${t.author || t.community}** in ${t.community} (relevance ${t.relevance}, ${t.intent} intent): "${clip(t.quote || t.snippet, 150)}"`).join('\n')}\n\nLead with a genuinely useful tip about their exact problem, then disclose you're the founder of ${c.name}. Next step: Discover → Draft reply on #1.`;
-  }
-  if (/trend|news|happening|industry/.test(m)) {
-    const trends = (s.trends || []).slice(0, 4);
-    if (!trends.length) return 'No trends are loaded yet — hit Refresh on the Dashboard.';
-    return `What's moving in ${c.field || 'your field'}:\n\n${trends.map((t) => `- **${t.title}** — ${clip(t.summary, 140)}`).join('\n')}\n\nA quick take on one of these, tied to what your users are saying, makes an easy post.`;
-  }
-  if (/draft|pending|queue|approve|schedule/.test(m)) {
-    return `You have ${pending.length} draft${pending.length === 1 ? '' : 's'} waiting for approval and ${scheduled.length} scheduled.${pending[0] ? `\n\nOldest pending: a ${pending[pending.length - 1].kind} — "${clip(pending[pending.length - 1].body, 120)}"` : ''}${scheduled[0] ? `\n\nNext scheduled: ${fmtWhen(scheduled[0].scheduledFor)}.` : ''}\n\nNext step: review them in Outreach (replies/DMs) or Schedule (posts).`;
-  }
-  const top = fresh[0] || threads[0];
-  return `Here's where things stand for ${c.name}:\n\n- ${threads.length} conversations found${clusters[0] ? `; the biggest pain point is **${clusters[0][0]}** (${clusters[0][1].length})` : ''}.\n- ${pending.length} draft${pending.length === 1 ? '' : 's'} pending, ${scheduled.length} scheduled.\n- ${events.length} founder event${events.length === 1 ? '' : 's'} this week${events[0] ? ` — next: ${events[0].title}, ${fmtWhen(events[0].start)}` : ''}.${top ? `\n\nBest next move: reply to ${top.author || 'the author'} in ${top.community} — "${clip(top.quote || top.title, 120)}".` : ''}\n\nAsk me "what should I post?", "who should I reply to?" or "which events are worth it?"`;
-}
-
 export async function chat(message) {
   const text = String(message || '').trim();
   if (!text) return '';
@@ -1437,21 +1433,22 @@ export async function chat(message) {
   return withLoading('chat', async () => {
     await warm();
     let reply = '';
-    if (canUseAI()) {
+    let failed = false;
+    if (canChatLive()) {
       try {
-        const history = (getState().chat || []).slice(-16).map((m) => ({ role: m.role, content: m.content }));
-        reply = await ai.complete({ system: chatSystem(), messages: history, maxTokens: 900 });
+        const history = (getState().chat || []).filter((m) => !m.error).slice(-16).map((m) => ({ role: m.role, content: m.content }));
+        reply = await ai.complete({ system: chatSystem(), messages: history, maxTokens: 900, provider: 'you' });
+        if (!String(reply || '').trim()) throw new Error('empty reply');
       } catch (e) {
         console.warn('[Lens] chat failed', e);
-        if (e?.code === 'no-relay') toast(you.NO_RELAY_MESSAGE, 'info');
-        else toast(`${aiName()} chat failed: ${e.message || e} — answering from your saved data instead.`, 'error');
+        reply = chatUnavailable(e);
+        failed = true;
       }
+    } else {
+      reply = chatUnavailable(null);
+      failed = true;
     }
-    if (!reply) {
-      await delay();
-      reply = demoChatAnswer(text);
-    }
-    setState((s) => ({ chat: [...(s.chat || []), { role: 'assistant', content: reply, at: nowIso() }] }));
+    setState((s) => ({ chat: [...(s.chat || []), { role: 'assistant', content: reply, at: nowIso(), ...(failed ? { error: true } : {}) }] }));
     return reply;
   });
 }
@@ -1480,76 +1477,44 @@ function mergeProfile(prev, next) {
   return out;
 }
 
-function splitList(text) {
-  return String(text || '')
-    .split(/,|;|\n|\band\b|\bor\b/i)
-    .map((x) => x.replace(/^[\s\-•*]+|[\s.!]+$/g, '').trim())
-    .filter((x) => x.length > 1)
-    .slice(0, 6);
-}
 
-function script() {
-  return demo?.onboardingScript || {};
-}
-
-function onboardingOpener(c) {
-  if (typeof script().opener === 'function') return script().opener(c);
-  return `I took a look at ${c.name || 'your site'}${c.tagline ? ` — "${c.tagline}"` : ''}${c.field ? `, in ${c.field}` : ''}. Who is it for? Describe the person who feels this problem most — their role, what they're trying to get done.`;
-}
-
-const SKIP_RE = /^\s*(skip|done|that'?s (it|all)|looks (good|right)|good enough|next)\b|^\s*(ok|okay)?\s*,?\s*(skip|done)\s*[.!]*\s*$/i;
-
-function demoOnboardingTurn(message, transcript, draft, c) {
-  const userTurns = transcript.filter((m) => m.role === 'user').length; // includes this message
-  const msg = String(message || '').trim();
-  const sc = script();
-  const defaults = sc.defaults || {};
-  if (SKIP_RE.test(msg)) {
-    const profile = mergeProfile({
-      audience: c.audience,
-      pains: defaults.pains || (demo?.painPoints || []).slice(0, 4),
-      channels: defaults.channels || ['r/3Dprinting', 'r/functionalprint', 'r/cad', 'Hacker News'],
-      keywords: c.keywords || [],
-      voice: c.voice,
-    }, draft);
-    const reply = typeof sc.skip === 'function' ? sc.skip(c) : `Got it — I've filled in the rest from what I learned about ${c.name}.`;
-    return { reply, ready: true, profile };
-  }
-  if (userTurns <= 1) {
-    const reply = typeof sc.askPains === 'function'
-      ? sc.askPains(msg)
-      : `Makes sense — ${clip(msg, 140)}. What do they struggle with most today?`;
-    return { reply, ready: false, profile: { audience: msg } };
-  }
-  if (userTurns === 2) {
-    const pains = splitList(msg);
-    const list = pains.length ? pains : [clip(msg, 80)];
-    const reply = typeof sc.askChannels === 'function'
-      ? sc.askChannels(list)
-      : 'Those are exactly the kinds of things Lens can listen for. Where do these people hang out online?';
-    return {
-      reply,
-      ready: false,
-      profile: { pains: list, keywords: [...new Set([...list.map((p) => p.toLowerCase()), ...(c.keywords || []).slice(0, 6)])].slice(0, 10) },
-    };
-  }
-  const channels = splitList(msg);
-  const chosen = channels.length ? channels : defaults.channels || [];
-  const profile = mergeProfile(draft, { channels: chosen, voice: draft.voice || c.voice, audience: draft.audience || c.audience });
-  const reply = typeof sc.ready === 'function'
-    ? sc.ready({ channels: chosen, pains: profile.pains || [], voice: profile.voice })
-    : `Perfect — your audience profile is ready.`;
-  return { reply, ready: true, profile: { channels: chosen, voice: profile.voice, audience: profile.audience } };
-}
+const SKIP_HINT = '\n\nYou can also press "Skip — use what Lens found" below to continue with a profile built from the scan.';
 
 export async function onboardingChat(message) {
   const text = String(message || '').trim();
   const c = company();
   const ob = onboardingState();
   if (!text && !ob.transcript.length) {
-    const opener = onboardingOpener(c);
-    patchOnboarding({ transcript: [{ role: 'assistant', content: opener, at: nowIso() }] });
-    return { reply: opener, ready: false, profile: ob.profileDraft };
+    const runUrl = ob.url;
+    return withLoading('onboarding', async () => {
+      await warm();
+      let opener = '';
+      let failed = false;
+      let failedErr = null;
+      if (canChatLive()) {
+        try {
+          opener = await ai.complete({
+            system: 'You are Lens, an AI that helps startup founders find their audience. You are starting an onboarding chat. In ≤ 60 words: say in one sentence what you understood the product does (from the website brief), then ask ONE question — who is it for (the person who feels the problem most: role and what they are trying to get done). Friendly, plain text only — no markdown, bullet points or headings.',
+            prompt: `Website brief:\n${companyBrief(c)}`,
+            maxTokens: 400,
+            provider: 'you',
+          });
+          if (!String(opener || '').trim()) throw new Error('empty reply');
+          opener = opener.trim();
+        } catch (e) {
+          console.warn('[Lens] onboarding opener failed', e);
+          failedErr = e;
+          failed = true;
+        }
+      } else {
+        failed = true;
+      }
+      if (failed) opener = chatUnavailable(failedErr, { plain: true }) + SKIP_HINT;
+      const cur = onboardingState();
+      // Only land in the run that asked for it (the founder may have gone Back and entered another URL).
+      if (cur.url === runUrl && !cur.transcript.length) patchOnboarding({ transcript: [{ role: 'assistant', content: opener, at: nowIso(), ...(failed ? { error: true } : {}) }] });
+      return { reply: opener, ready: false, profile: ob.profileDraft };
+    });
   }
   if (!text) return { reply: '', ready: false, profile: ob.profileDraft };
 
@@ -1559,11 +1524,15 @@ export async function onboardingChat(message) {
   return withLoading('onboarding', async () => {
     await warm();
     let turn = null;
-    if (canUseAI() && !SKIP_RE.test(text)) {
+    // Every typed message goes to You.com (skip/done included — the prompt handles those).
+    // The deterministic shortcut is the "Skip — use what Lens found" button in start.js.
+    if (!canChatLive()) {
+      turn = { reply: chatUnavailable(null, { plain: true }) + SKIP_HINT, ready: false, profile: {}, error: true };
+    } else {
       try {
         const userCount = transcript.filter((m) => m.role === 'user').length;
         const out = await ai.json({
-          system: `You are Lens, onboarding a startup founder. Learn their target audience, the audience's pains (in the audience's own words), where they hang out online, and the founder's voice — in at most 4 questions, ONE question per reply, friendly and brief (≤ 60 words). Build on what the founder already said; never repeat a question. Set ready=true once you know audience, pains and channels (or the founder says skip/done, or after the 4th answer). When ready, the reply summarizes the profile in one or two sentences and asks for nothing.`,
+          system: `You are Lens, onboarding a startup founder. Learn their target audience, the audience's pains (in the audience's own words), where they hang out online, and the founder's voice — in at most 4 questions, ONE question per reply, friendly and brief (≤ 60 words). Build on what the founder already said; never repeat a question. Set ready=true once you know audience, pains and channels (or the founder says skip/done, or after the 4th answer). When ready, the reply summarizes the profile in one or two sentences and asks for nothing. Write plain text only — no markdown, no lists.`,
           prompt: `What Lens learned from the website:
 ${companyBrief(c)}
 
@@ -1571,29 +1540,29 @@ Profile so far: ${JSON.stringify(ob.profileDraft)}
 Founder answers so far: ${userCount}
 
 Conversation:
-${transcript.map((m) => `${m.role === 'user' ? 'Founder' : 'Lens'}: ${m.content}`).join('\n')}`,
+${transcript.filter((m) => !m.error).map((m) => `${m.role === 'user' ? 'Founder' : 'Lens'}: ${m.content}`).join('\n')}`,
           schemaHint: '{"reply":"","ready":false,"profile":{"audience":"","pains":[""],"channels":[""],"keywords":[""],"voice":""}}',
           maxTokens: 900,
+          provider: 'you',
         });
         if (out && typeof out.reply === 'string' && out.reply.trim()) {
           turn = { reply: out.reply.trim(), ready: Boolean(out.ready) || userCount >= 5, profile: out.profile && typeof out.profile === 'object' ? out.profile : {} };
+        } else {
+          throw new Error('empty reply');
         }
       } catch (e) {
         console.warn('[Lens] onboarding chat failed', e);
-        if (e?.code === 'no-relay') toast(you.NO_RELAY_MESSAGE, 'info');
-        else toast(`${aiName()} is unavailable (${e.message || e}) — continuing with the guided questions.`, 'error');
+        turn = { reply: chatUnavailable(e, { plain: true }) + SKIP_HINT, ready: false, profile: {}, error: true };
       }
     }
-    if (!turn) {
-      await delay();
-      turn = demoOnboardingTurn(text, transcript, ob.profileDraft, c);
-    }
     const profile = mergeProfile(ob.profileDraft, turn.profile);
+    // The founder may have gone Back and started another URL while You.com was answering.
+    if ((getState().onboarding || {}).url !== ob.url) return { reply: turn.reply, ready: false, profile: ob.profileDraft, stale: true };
     setState((s) => ({
       onboarding: {
         ...onboardingState(),
         ...(s.onboarding || {}),
-        transcript: [...transcript, { role: 'assistant', content: turn.reply, at: nowIso() }],
+        transcript: [...transcript, { role: 'assistant', content: turn.reply, at: nowIso(), ...(turn.error ? { error: true } : {}) }],
         profileDraft: profile,
       },
     }));
@@ -1765,40 +1734,6 @@ function lastProposal(history) {
   return null;
 }
 
-function demoIdeaTurn(text, history, c) {
-  const last = lastProposal(history);
-  // Refine the current proposal when the founder asks for a change to it.
-  if (last && REFINE_RE.test(text) && countWords(text) <= 25) {
-    const ins = /personal/i.test(text) ? `${text} warmer` : text;
-    const r = demoRewrite(last.proposal.body, ins, { painPoint: '' });
-    if (r.changed) {
-      return {
-        reply: 'Updated — here\'s the revised version. Add it to your stack, or keep tweaking.',
-        proposal: { ...last.proposal, body: r.body },
-      };
-    }
-    return {
-      reply: 'In demo mode I can make it shorter, warmer, more specific, change the hook, or end on a question. Which one?',
-      proposal: null,
-    };
-  }
-  // The idea so far = everything the founder said since the last proposal.
-  const since = history.slice(last ? last.index + 1 : 0).filter((m) => m.role === 'user').map((m) => m.content);
-  // Drop throwaway openers ("a post", "idea:") once the founder has said something substantial.
-  const substantial = since.filter((m) => countWords(m) >= 4);
-  const idea = (substantial.length ? substantial : since).join(' ').trim() || text;
-  if (since.length <= 1 && countWords(idea) < 8) {
-    return {
-      reply: `"${clip(text, 80)}" — good start. Who is it for, and what's the one thing you want them to take away? A concrete example or story makes it land.`,
-      proposal: null,
-    };
-  }
-  return {
-    reply: 'Here\'s a first version shaped as a LinkedIn post. Add it to your stack, or tell me what to change (shorter, warmer, more specific, a different hook…).',
-    proposal: demoIdeaPost(idea, c),
-  };
-}
-
 function demoIdeaPost(text, c) {
   const clusters = (getState().threads || []).filter((t) => t.painPoint);
   const relatedThread = clusters.find((t) => words(text).some((w) => w.length > 4 && `${t.title} ${t.snippet} ${t.painPoint}`.toLowerCase().includes(w)));
@@ -1822,16 +1757,19 @@ export async function ideaChat(message) {
     const c = company();
     const history = getState().ideaChat || [];
     let turn = null;
-    if (canUseAI()) {
+    if (!canChatLive()) {
+      turn = { reply: chatUnavailable(null), proposal: null, error: true };
+    } else {
       try {
         const out = await ai.json({
+          provider: 'you',
           system: `You help the founder of ${c.name} turn a rough idea into a LinkedIn post. Ask at most one short clarifying question if the idea is too vague; otherwise propose a full post. Keep replies brief (≤ 50 words).\n${POST_RULES}`,
           prompt: `${companyBrief(c)}
 
 Recent pain points from real conversations: ${(await clusterPainPoints()).slice(0, 4).map((cl) => `${cl.painPoint} (${cl.count})`).join(', ') || 'none yet'}
 
 Conversation:
-${history.slice(-12).map((m) => `${m.role === 'user' ? 'Founder' : 'Lens'}: ${m.content}${m.proposal ? `\n[Proposed post: ${clip(m.proposal.body, 400)}]` : ''}`).join('\n')}
+${history.filter((m) => !m.error).slice(-12).map((m) => `${m.role === 'user' ? 'Founder' : 'Lens'}: ${m.content}${m.proposal ? `\n[Proposed post: ${clip(m.proposal.body, 400)}]` : ''}`).join('\n')}
 
 Return the reply and, when you have a post (new or refined), the proposal; else proposal null.`,
           schemaHint: '{"reply":"","proposal":{"title":"","body":"","visualIdea":"","sculptexPrompt":""}}',
@@ -1842,18 +1780,14 @@ Return the reply and, when you have a post (new or refined), the proposal; else 
           const proposal = out.proposal && out.proposal.body ? normalizePost(out.proposal, 'Your idea') : null;
           turn = { reply: out.reply.trim() || (proposal ? 'Here\'s a draft.' : ''), proposal };
         }
+        if (!turn || (!turn.reply && !turn.proposal)) throw new Error('empty reply');
       } catch (e) {
         console.warn('[Lens] idea chat failed', e);
-        if (e?.code === 'no-relay') toast(you.NO_RELAY_MESSAGE, 'info');
-        else toast(`${aiName()} is unavailable (${e.message || e}) — using a template instead.`, 'error');
+        turn = { reply: chatUnavailable(e), proposal: null, error: true };
       }
     }
-    if (!turn) {
-      await delay();
-      turn = demoIdeaTurn(text, history, c);
-    }
     setState((s) => ({
-      ideaChat: [...(s.ideaChat || []), { role: 'assistant', content: turn.reply, at: nowIso(), ...(turn.proposal ? { proposal: turn.proposal } : {}) }],
+      ideaChat: [...(s.ideaChat || []), { role: 'assistant', content: turn.reply, at: nowIso(), ...(turn.proposal ? { proposal: turn.proposal } : {}), ...(turn.error ? { error: true } : {}) }],
     }));
     return turn;
   });

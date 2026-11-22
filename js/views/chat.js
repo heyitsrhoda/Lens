@@ -185,7 +185,7 @@ function QuickLinks() {
   `;
 }
 
-function EmptyChat({ onPick, hasKey, companyName }) {
+function EmptyChat({ onPick, hasKey, noRelay, companyName }) {
   return html`
     <div className="cd-empty">
       <div className="cd-empty-icon"><${Icon} name="chat" size=${22} /></div>
@@ -202,9 +202,14 @@ function EmptyChat({ onPick, hasKey, companyName }) {
           </button>`
         )}
       </div>
-      ${!hasKey &&
+      ${!hasKey && noRelay &&
       html`<p className="small muted cd-empty-note">
-        Demo mode is on (or no AI key is available yet), so answers come from sample data.
+        Ask Lens runs on You.com through the Lens server, which isn't reachable here. Open Lens on its Vercel deployment
+        (or run <code>python3 dev/serve.py</code> locally).
+      </p>`}
+      ${!hasKey && !noRelay &&
+      html`<p className="small muted cd-empty-note">
+        Ask Lens runs on You.com. Add your You.com API key to start chatting.
         <a
           href="#/settings?tab=connections"
           onClick=${(e) => {
@@ -223,10 +228,13 @@ function EmptyChat({ onPick, hasKey, companyName }) {
 export function ChatDrawer() {
   const open = useStore((s) => !!(s.ui && s.ui.chatOpen));
   const messages = useStore((s) => s.chat) || EMPTY;
-  // Live when demo mode is off and the active AI provider is usable (You.com user/env key, or Claude key).
+  // The chat is always real You.com AI: live whenever a You.com key exists (user's or the deployment's).
   const live = useStore((s) => liveFlags(s));
-  const hasKey = live.ai;
-  const providerName = live.provider === 'claude' ? 'Claude' : 'You.com';
+  const hasKey = live.chat;
+  const noRelay = useStore((s) => !!(s.ui && s.ui.relay && s.ui.relay.available === false));
+  // Before the first relay check finishes we don't know yet whether the deployment holds a shared key.
+  const checking = useStore((s) => !(s.ui && s.ui.relay) && !String((s.settings && s.settings.youKey) || '').trim());
+  const providerName = 'You.com';
   const companyName = useStore((s) => (s.company ? s.company.name : '')) || '';
 
   const [input, setInput] = useState('');
@@ -332,7 +340,7 @@ export function ChatDrawer() {
           <span className="cd-title-icon"><${Icon} name="sparkles" size=${16} /></span>
           <div>
             <h2>Ask Lens</h2>
-            <span className="small muted">${hasKey ? `${providerName} · grounded in your data` : 'Demo mode'}</span>
+            <span className="small muted">${hasKey ? `${providerName} · grounded in your data` : checking ? 'Connecting to You.com…' : 'You.com not connected'}</span>
           </div>
         </div>
         <div className="row cd-header-actions">
@@ -355,7 +363,7 @@ export function ChatDrawer() {
 
       <div className="cd-list" ref=${listRef} aria-live="polite">
         ${isEmpty
-          ? html`<${EmptyChat} onPick=${send} hasKey=${hasKey} companyName=${companyName} />`
+          ? html`<${EmptyChat} onPick=${send} hasKey=${hasKey || checking} noRelay=${noRelay} companyName=${companyName} />`
           : html`
               ${messages.map(
                 (m, i) => html`<${Bubble} key=${`${i}-${m.at || ''}`} role=${m.role === 'user' ? 'user' : 'assistant'} content=${m.content} at=${m.at}>

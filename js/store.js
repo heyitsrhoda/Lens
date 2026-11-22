@@ -347,7 +347,7 @@ function shallowEqual(a, b) {
  * Live/demo flags derived from store state only (reactive: use inside useStore selectors).
  * Mirrors lens.js canUseYou()/canUseAI(): You.com is usable with the user's key or the deployment's
  * env key (state.ui.relay, published by youcom.js), Claude with the user's Claude key.
- * → { demoMode, search, ai, live, provider }
+ * → { demoMode, search, ai, live, provider, chat }
  */
 export function liveFlags(s = state) {
   const st = (s && s.settings) || {};
@@ -359,10 +359,12 @@ export function liveFlags(s = state) {
   let prov = chosen;
   if (chosen === 'claude' && !claudeOk && youOk) prov = 'you';
   if (chosen === 'you' && !youOk && claudeOk) prov = 'claude';
-  const demoMode = Boolean(st.demoMode);
+  // Demo mode is automatic unless the user flipped the toggle: live whenever You.com is reachable.
+  const demoMode = st.demoModeExplicit ? Boolean(st.demoMode) : !youOk && !(chosen === 'claude' && claudeOk);
   const search = !demoMode && youOk;
   const aiLive = !demoMode && (prov === 'claude' ? claudeOk : youOk);
-  return { demoMode, search, ai: aiLive, live: search || aiLive, provider: prov };
+  // The chats always use You.com (never scripted), independent of demo mode.
+  return { demoMode, search, ai: aiLive, live: search || aiLive, provider: prov, chat: youOk };
 }
 
 const identity = (s) => s;
