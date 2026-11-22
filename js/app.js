@@ -18,10 +18,10 @@ const QUESTIONS = [
 ];
 const SLOTS = QUESTIONS.map(([key]) => key);
 const CLOSING = 'I have enough to save your brand. Connect LinkedIn to continue (Lens posts there). Sculptex for 3D visuals is optional.';
-const DM_HINT = 'Copy the message, send it to them where they posted, then mark it sent. Swipe left to skip it.';
-const REPLY_HINT_LINKEDIN = 'Approve to post this reply on LinkedIn. Swipe left to skip it.';
+const DM_HINT = 'Copy the message, send it to them where they posted, then press Done. Swipe to clear it.';
+const REPLY_HINT_LINKEDIN = 'Check to post this reply on LinkedIn, X to skip it.';
 const REPLY_MANUAL_CODES = ['unsupported', 'not-found', 'forbidden', 'not-linkedin', 'rejected', 'invalid'];
-const REPLY_HINT = 'Copy the reply, post it in the thread, then mark it sent. Swipe left to skip it.';
+const REPLY_HINT = 'Copy the reply, post it in the thread, then press Done. Swipe to clear it.';
 const REPLY_MAX = 1250; // LinkedIn comment limit
 const LISTEN_STALE = 12 * 3600000;
 const EFFORTS = ['low', 'medium', 'high'];
@@ -572,17 +572,20 @@ function postCard(post) {
   ${editing ? '' : `<div class="post-revision">${revising ? revisionComposer('revise-form', post.id, revisionBusy || busy) : `<button class="icon ghost round" data-action="revise" title="Suggest a revision" aria-label="Suggest a revision" ${busy ? 'disabled' : ''}>${icon('chat')}</button>`}</div>`}
   <div class="swipe-overlay" aria-hidden="true"><span id="swipe-mark"></span></div></article>`;
 }
-function labeledDecisions(declineTitle, approveLabel, approveTitle, hint, disabled) {
-  return `<div class="decisions labeled">
-      <div class="decision-wrap"><button id="decline" class="icon decision decline" data-action="decline" aria-label="I don’t like this" title="${declineTitle}" ${disabled}>${icon('decline')}</button><label class="decision-label" for="decline">I don’t like this</label></div>
-      <div class="decision-wrap"><button id="approve" class="icon decision approve" data-action="approve" aria-label="${approveLabel}" title="${approveTitle}" ${disabled}>${icon('approve')}</button><label class="decision-label" for="approve">${approveLabel}</label></div>
-    </div><p class="review-hint">${hint}</p>`;
-}
+// Cards the founder sends themselves (DMs, replies outside LinkedIn) just get Done; Lens sends nothing for them.
+function isCopyCard(post) {return post?.kind === 'dm' || (post?.kind === 'reply' && !isLinkedInReply(post));}
 function decisionButtons(post) {
   const disabled = rewritingId !== null || replyingId !== null || revisionBusy ? 'disabled' : '';
-  if (post.kind === 'dm') return labeledDecisions('Remove from stack', 'I sent this', 'Mark as sent', DM_HINT, disabled);
-  if (isLinkedInReply(post)) return labeledDecisions('Remove from stack', 'Post reply', 'Post this reply on LinkedIn', REPLY_HINT_LINKEDIN, disabled);
-  if (post.kind === 'reply') return labeledDecisions('Remove from stack', 'I sent this', 'Mark as sent', REPLY_HINT, disabled);
+  if (isCopyCard(post)) {
+    return `<div class="decisions done-decision"><button id="done" class="btn primary done-button" data-action="done" ${disabled}>${icon('approve')} Done</button></div>
+      <p class="review-hint">${post.kind === 'dm' ? DM_HINT : REPLY_HINT}</p>`;
+  }
+  if (isLinkedInReply(post)) {
+    return `<div class="decisions">
+      <button id="decline" class="icon decision decline" data-action="decline" aria-label="Skip this reply" title="Skip" ${disabled}>${icon('decline')}</button>
+      <button id="approve" class="icon decision approve" data-action="approve" aria-label="Post this reply on LinkedIn" title="Post reply on LinkedIn" ${disabled}>${icon('approve')}</button>
+    </div><p class="review-hint">${REPLY_HINT_LINKEDIN}</p>`;
+  }
   return `<div class="decisions">
       <button id="decline" class="icon decision decline" data-action="decline" aria-label="Decline post" title="Decline" ${disabled}>${icon('decline')}</button>
       <button id="approve" class="icon decision approve" data-action="approve" aria-label="Approve and schedule post" title="Approve and schedule" ${disabled}>${icon('approve')}</button>
@@ -1083,9 +1086,9 @@ function commitDecision(approve, id) {
   if (state.posts[0]?.id !== id) return;
   const post = state.posts.shift();
   replyError = '';
-  if (approve && post.kind === 'dm') {
-    state.journal.unshift({...post, status: 'Sent', sentAt: Date.now()});
-    notify('Marked as sent.');
+  if (isCopyCard(post)) {
+    state.journal.unshift({...post, status: 'Done', doneAt: Date.now()});
+    notify('Done.');
   } else if (approve && post.kind === 'reply') {
     state.journal.unshift({...post, status: 'Replied', repliedAt: Date.now()});
     if (post.postedReply) notify('Reply posted on LinkedIn.', post.replyUrl ? {href: post.replyUrl, label: 'View ↗'} : null);
@@ -1095,14 +1098,14 @@ function commitDecision(approve, id) {
     notify('Scheduled for ' + formatSlot(slot) + '.');
   } else {
     state.journal.unshift({...post, status: 'Declined'});
-    notify(post.kind === 'reply' ? 'Reply removed from your stack.' : post.kind === 'dm' ? 'Message removed from your stack.' : 'Post declined.');
+    notify(post.kind === 'reply' ? 'Reply skipped.' : 'Post declined.');
   }
   save();
   drag = null;
   revising = false;
   revisionError = '';
   render();
-  main.querySelector('#approve,[data-action=generate]')?.focus({preventScroll: true});
+  main.querySelector('#approve,#done,[data-action=generate]')?.focus({preventScroll: true});
 }
 function decide(approve, card = main.querySelector('#post-card')) {
   if (view !== 'review' || editing || decisionPending || !state.posts.length || rewritingId !== null || replyingId !== null || revisionBusy) return;
@@ -1121,7 +1124,7 @@ function animateOut(approve, id, card = main.querySelector('#post-card')) {
     return;
   }
   decisionPending = true;
-  for (const action of ['approve', 'decline']) {const button = document.querySelector('#' + action); if (button) button.disabled = true;}
+  for (const action of ['approve', 'decline', 'done']) {const button = document.querySelector('#' + action); if (button) button.disabled = true;}
   const direction = approve ? 1 : -1;
   paintSwipe(card, direction * 170);
   card.classList.add('exiting');
@@ -1766,6 +1769,7 @@ document.addEventListener('click', event => {
   if (action === 'edit' && !editing && !decisionPending && rewritingId === null && replyingId === null && !revisionBusy) {editing = true; render(false); main.querySelector('input[name="title"]')?.focus();}
   if (action === 'cancel-edit') {editing = false; render(false); main.querySelector('[data-action=edit]')?.focus({preventScroll: true});}
   if (action === 'approve' || action === 'decline') decide(action === 'approve');
+  if (action === 'done') decide(true);
   if (action === 'copy-item') copyMessage(button);
   if (action === 'reply-manually') replyManually();
   if (action === 'queue-proposal') queueProposal();

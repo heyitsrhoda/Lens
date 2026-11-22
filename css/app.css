@@ -183,3 +183,8 @@ h1[tabindex="-1"]:focus{outline:none}
 
 /* Stack drafting reuses the scan stage */
 .stack-scan{padding-top:clamp(28px,7vh,64px)}
+
+/* Copy-and-paste cards: one Done button */
+.done-decision{justify-content:center}
+.done-button{display:inline-flex;align-items:center;gap:7px;min-height:44px;padding:0 24px;border-radius:12px}
+.done-button .line-icon{width:18px;height:18px}
