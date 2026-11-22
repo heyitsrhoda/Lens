@@ -1,5 +1,6 @@
 // Browser MCP client (Streamable HTTP transport + OAuth 2.1 with PKCE, dynamic client registration).
-// Multi-server: every function takes a connection key ('sculptex' | 'canva').
+// Every function takes a connection key; the only server is 'sculptex' (Lens's visual provider). The code stays
+// keyed so another standard MCP server could be added to DEFAULT_URLS + LABELS.
 // No API keys anywhere — each server is just its MCP URL; sign-in is the server's own OAuth flow.
 //
 // Sculptex, verified against the live server:
@@ -8,26 +9,19 @@
 //   Authorization server metadata: authorization_endpoint /oauth/authorize, token_endpoint /oauth/token,
 //     registration_endpoint /oauth/register, code_challenge_methods_supported ["S256"], token auth 'none' supported.
 //   CORS: Access-Control-Allow-Origin *, exposes WWW-Authenticate + Mcp-Session-Id, methods GET/POST/OPTIONS.
-//
-// Canva (https://mcp.canva.com/mcp), verified by probing:
-//   POST without a token → 401, WWW-Authenticate: Bearer resource_metadata="https://mcp.canva.com/.well-known/oauth-protected-resource/mcp"
-//   PRM (path-suffixed): { resource: "https://mcp.canva.com/mcp", authorization_servers: ["https://mcp.canva.com"],
-//     scopes_supported: [profile:read, design:*, folder:*, brandtemplate:*, comment:*, asset:*, brandkit:read, help:*] }
-//   AS: /authorize, /token, /register (DCR), PKCE S256, token auth 'none'.
-//   CORS reflects the Origin and allows Authorization/* headers, but sends NO Access-Control-Expose-Headers on
-//   the 401 — the browser cannot read WWW-Authenticate there, so discovery falls back to the path-suffixed
-//   well-known URL (which is the same document).
+//   If a server's 401 hides WWW-Authenticate from the browser (no Access-Control-Expose-Headers), discovery falls
+//   back to the well-known protected-resource URLs.
 //
 // Connection state (tokens, session id, tools, status, account) lives only in sessionStorage under
 // 'lens-mcp-v3' — closing the tab forgets it. The pending OAuth record and registered clients also live in
-// sessionStorage only. Nothing here touches localStorage.
+// sessionStorage only. Nothing here touches localStorage. Entries for servers Lens no longer uses (left by an
+// older version in the same tab session) are dropped when the store is read.
 
 export const PROTOCOL_VERSION = '2025-06-18';
 export const DEFAULT_URLS = {
   sculptex: 'https://sculptex-git-main-jacksonschorr.vercel.app/mcp',
-  canva: 'https://mcp.canva.com/mcp',
 };
-const LABELS = { sculptex: 'Sculptex', canva: 'Canva' };
+const LABELS = { sculptex: 'Sculptex' };
 // Per-server OAuth scope overrides. Default: the PRM's scopes_supported joined by spaces.
 const SCOPE_OVERRIDES = {};
 // When a server advertises no scopes at all.
@@ -63,7 +57,19 @@ function loadStore() {
   if (store) return store;
   store = readSession(STATE_KEY);
   if (!store || typeof store !== 'object' || Array.isArray(store)) store = {};
+  let pruned = false;
+  for (const key of Object.keys(store)) {
+    if (!isKnownKey(key)) {
+      delete store[key];
+      pruned = true;
+    }
+  }
+  if (pruned) saveStore();
   return store;
+}
+
+function isKnownKey(key) {
+  return Object.prototype.hasOwnProperty.call(DEFAULT_URLS, key);
 }
 
 function saveStore() {
@@ -710,7 +716,7 @@ function normName(n) {
 
 /**
  * Resolve a tool from the cached tools/list: first by exact name (ignoring case and -/_ separators, also allowing a
- * server prefix such as "canva_generate_design"), in order of preference; then, if intents are given, by pickTool.
+ * server prefix such as "sculptex_generate_model"), in order of preference; then, if intents are given, by pickTool.
  */
 export function findTool(key, preferredNames = [], intents = []) {
   const tools = getConnection(key).tools;
@@ -864,6 +870,11 @@ async function processCallback() {
     return { key: null, label: '', ok: false, error: 'That sign-in link expired or was opened in another tab. Connect again from Settings.' };
   }
   const key = pending.key;
+  if (!isKnownKey(key)) {
+    // A sign-in started for a server Lens no longer uses: drop it quietly.
+    cleanCallbackUrl(pending.returnHash);
+    return { key: null, label: '', ok: false };
+  }
   const name = label(key);
   cleanCallbackUrl(pending.returnHash);
 

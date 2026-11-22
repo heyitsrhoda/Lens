@@ -1,7 +1,7 @@
 // Lens service contract (docs/SPEC.md → "Service contract — js/services/lens.js").
 //
-//   init()                                   → { returnedFrom?: 'Canva'|'Sculptex'|'LinkedIn', error? }
-//   connections()                            (sync) → { Canva:{connected, account?, error?}, Sculptex:{…}, LinkedIn:{connected, name?, picture?, error?} }
+//   init()                                   → { returnedFrom?: 'Sculptex'|'LinkedIn', error? }
+//   connections()                            (sync) → { Sculptex:{connected, account?, error?}, LinkedIn:{connected, name?, picture?, error?} }
 //   onConnectionsChange(fn)                  → unsubscribe
 //   connect(provider) · disconnect(provider) · disconnectAll()
 //   scanSite(url)                            → { name, summary, product, audience?, keywords: [] }
@@ -10,7 +10,7 @@
 //   findDMs({ brand, count })                → [{ kind:'dm', title, copy, recipient?, sourceUrl, sourceLabel }]
 //   revise({ brand, item, request })         → { title?, copy, message }
 //   brainstorm({ brand, messages, proposal })→ { reply, proposal?: { title, copy } }
-//   createVisual({ provider, prompt })       → { src, link?, provider, designId? }  (designId: Canva, when only a link could be kept)
+//   createVisual({ provider, prompt })       → { src, link?, provider }  (provider: 'Sculptex')
 //   publish(post)                            → { id, url?, imageSkipped? }
 //
 // Errors are Error objects with a readable .message; .code may be 'no-relay' | 'no-key' | 'credits' | 'rate' |
@@ -18,16 +18,16 @@
 // either You.com search (./you.js) or OpenRouter AI (./ai.js); the message says which.
 //
 // Search and page extraction go through You.com (./you.js → ./api/you); every AI (LLM) call goes through OpenRouter
-// (./ai.js → ./api/ai). Canva + Sculptex are MCP servers (./mcp.js, OAuth in
-// sessionStorage). LinkedIn lives behind ./api/linkedin/* (./linkedin.js, HttpOnly session cookie).
+// (./ai.js → ./api/ai). Sculptex is an MCP server (./mcp.js, OAuth in
+// sessionStorage) and the only visual provider. LinkedIn lives behind ./api/linkedin/* (./linkedin.js, HttpOnly session cookie).
 
 import * as you from './you.js';
 import * as ai from './ai.js';
 import * as mcp from './mcp.js';
 import * as linkedin from './linkedin.js';
 
-const PROVIDERS = ['Canva', 'Sculptex', 'LinkedIn'];
-const MCP_KEYS = { Canva: 'canva', Sculptex: 'sculptex' };
+const PROVIDERS = ['Sculptex', 'LinkedIn'];
+const MCP_KEYS = { Sculptex: 'sculptex' };
 const COMMUNITY_DOMAINS = ['reddit.com', 'news.ycombinator.com', 'indiehackers.com', 'x.com', 'linkedin.com'];
 
 const SLOTS = [
@@ -37,7 +37,7 @@ const SLOTS = [
   ['cadence', 'How often should Lens post? For example, 3 times a week.'],
   ['voice', 'How should your posts sound? You can also mention topics to avoid.'],
 ];
-const FINAL_REPLY = 'I have enough to save your brand. Connect LinkedIn to continue (Lens posts there). Sculptex for 3D visuals and Canva for design are optional.';
+const FINAL_REPLY = 'I have enough to save your brand. Connect LinkedIn to continue (Lens posts there). Sculptex for 3D visuals is optional.';
 const LINKEDIN_REASONS = {
   cancelled: 'LinkedIn sign-in was cancelled.',
   state: 'LinkedIn sign-in expired or was opened in another tab. Try connecting again.',
@@ -240,7 +240,7 @@ export function connections() {
   if (li.name) LinkedIn.name = li.name;
   if (li.picture) LinkedIn.picture = li.picture;
   if (li.error && !li.connected) LinkedIn.error = li.error;
-  return { Canva: mcpRow('canva'), Sculptex: mcpRow('sculptex'), LinkedIn };
+  return { Sculptex: mcpRow('sculptex'), LinkedIn };
 }
 
 export function onConnectionsChange(fn) {
@@ -288,15 +288,7 @@ function fillAccount(key) {
 
 async function lookupAccount(key) {
   try {
-    let account = '';
-    if (key === 'canva') {
-      const tool = mcp.findTool('canva', CANVA_TOOLS.profile.names);
-      if (tool) {
-        const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, canvaArgs(tool, {})));
-        account = findKey(parsed.json, ['display_name', 'displayName', 'name', 'email'], (v) => typeof v === 'string' && v.trim()) || '';
-      }
-    }
-    if (!account) account = decodeJwtName(mcp.getConnection(key).auth?.accessToken);
+    const account = decodeJwtName(mcp.getConnection(key).auth?.accessToken);
     if (account) mcp.patchConn(key, { account: String(account).trim().slice(0, 120) });
   } catch (e) {
     console.warn(`[Lens] ${mcp.label(key)} account lookup failed`, e);
@@ -338,7 +330,7 @@ function stripLinkedInFlag() {
 
 async function doInit() {
   const out = {};
-  // 1) Canva / Sculptex OAuth return (?code=&state= on this page).
+  // 1) Sculptex OAuth return (?code=&state= on this page).
   if (mcp.hasPendingCallback()) {
     const r = await mcp.handleOAuthCallback();
     if (r && r.label) out.returnedFrom = r.label;
@@ -396,20 +388,9 @@ try {
 }
 
 /** Connect a provider. Throws code 'redirect' when the page is navigating to the provider's sign-in. */
-// Canva's MCP only accepts sign-in return addresses it has allowlisted (localhost, claude.ai, …).
-// lensbeta.vercel.app is not on that list yet; flip this once Canva approves Lens
-// (request: https://www.canva.dev/docs/mcp/access/).
-const CANVA_APPROVED = false;
-
-/** Sync: false when a provider can't be connected from this deployment yet. */
-export function isAvailable(provider) {
-  return providerName(provider) !== 'Canva' || CANVA_APPROVED;
-}
-
 export async function connect(provider) {
   const p = providerName(provider);
   if (!p) throw err('', `Unknown provider: ${provider}`);
-  if (!isAvailable(p)) throw err('not-approved', 'Canva hasn’t approved Lens for sign-in yet.');
   if (p === 'LinkedIn') {
     await linkedin.connect(); // navigates away (throws 'redirect') or throws a readable error
     return connections().LinkedIn;
@@ -611,7 +592,7 @@ Rules:
 - One message may answer several slots; record every slot it clearly answers. The founder may also correct an earlier answer.
 - Never invent answers.
 - Replies are brief (1–2 sentences, max 40 words), friendly, plain text. No markdown, no lists, no emoji.
-- When all five slots are filled, set done to true and reply with a short wrap-up: you have enough to save the brand, and they need to connect LinkedIn to continue (Lens posts there), and Sculptex for 3D visuals and Canva for design are optional.`;
+- When all five slots are filled, set done to true and reply with a short wrap-up: you have enough to save the brand, and they need to connect LinkedIn to continue (Lens posts there), and Sculptex for 3D visuals is optional.`;
 
   const prompt = `Company website: ${str(site, 300) || 'unknown'}
 Website scan: ${scanText}
@@ -1109,7 +1090,7 @@ async function renderWithSculptex(prompt) {
   return out;
 }
 
-// ---- images: LinkedIn takes PNG, JPEG or GIF; links from Canva expire (export ≈ 24 h, thumbnail ≈ 15 min)
+// ---- images: LinkedIn takes PNG, JPEG or GIF; keep a lasting copy rather than a link that may expire
 
 const POSTABLE_IMAGE = /^data:image\/(png|jpe?g|gif);base64,/i;
 const MAX_STORED_IMAGE_CHARS = 1000000; // the post is saved in localStorage (~5 MB for everything)
@@ -1162,224 +1143,18 @@ async function postableImage(src, timeout = 15000) {
   }
 }
 
-// ---- Canva (tools resolved from tools/list; Canva's documented names first, then a fuzzy match)
-
-const CANVA_INTENT = 'Create a social media visual for a LinkedIn post drafted in Lens';
-const CANVA_TOOLS = {
-  generate: { names: ['generate-design'], intents: ['generate design', 'design candidates'] },
-  fromCandidate: { names: ['create-design-from-candidate'], intents: ['create design from candidate', 'candidate'] },
-  get: { names: ['get-design'], intents: [] },
-  export: { names: ['export-design', 'create-design-export-job'], intents: ['export design'] },
-  profile: { names: ['get-user-profile', 'get-profile', 'get-current-user', 'get-user', 'whoami', 'me'], intents: [] },
-};
-// generate-design's design_type enum has no LinkedIn type in every version; these are social formats in preference order.
-const CANVA_TYPE_FALLBACKS = ['linkedin_post', 'instagram_post', 'facebook_post', 'twitter_post', 'poster'];
-
-const isObj = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
-
-async function canvaTool(which) {
-  const spec = CANVA_TOOLS[which];
-  let tool = mcp.findTool('canva', spec.names, spec.intents);
-  if (!tool) {
-    await mcp.listTools('canva');
-    tool = mcp.findTool('canva', spec.names, spec.intents);
-  }
-  if (!tool) throw err('', `Your Canva connection doesn't offer "${spec.names[0]}". Reconnect Canva in Settings and try again.`);
-  return tool;
-}
-
-function schemaProps(tool) {
-  const schema = tool?.inputSchema || {};
-  return { props: schema.properties || {}, required: Array.isArray(schema.required) ? schema.required : [] };
-}
-
-function canvaArgs(tool, values) {
-  const { props, required } = schemaProps(tool);
-  const names = Object.keys(props);
-  const args = {};
-  for (const [k, v] of Object.entries(values)) {
-    if (v === undefined || v === null || v === '') continue;
-    if (names.length && !(k in props)) continue;
-    args[k] = v;
-  }
-  if (names.length && 'user_intent' in props && !('user_intent' in args)) args.user_intent = CANVA_INTENT;
-  for (const n of required) if (!(n in args)) args[n] = defaultFor(props[n] || {});
-  return args;
-}
-
-function mainTextProp(tool, fallback) {
-  const { props, required } = schemaProps(tool);
-  const names = Object.keys(props);
-  if (!names.length) return fallback;
-  for (const p of ['query', 'prompt', 'brief', 'description', 'text', 'instructions']) if (p in props) return p;
-  return required.find((n) => isStringProp(props[n]) && !props[n]?.enum && n !== 'user_intent') || fallback;
-}
-
-function findKey(values, keys, ok = (v) => v != null, depth = 0) {
-  if (depth > 6 || values == null) return undefined;
-  const list = Array.isArray(values) && depth === 0 ? values : [values];
-  for (const v of list) {
-    if (!v || typeof v !== 'object') continue;
-    if (!Array.isArray(v)) {
-      for (const k of keys) if (k in v && ok(v[k])) return v[k];
-    }
-    for (const child of Array.isArray(v) ? v : Object.values(v)) {
-      if (child && typeof child === 'object') {
-        const hit = findKey(child, keys, ok, depth + 1);
-        if (hit !== undefined) return hit;
-      }
-    }
-  }
-  return undefined;
-}
-
-function firstThumb(x) {
-  if (!x) return '';
-  if (typeof x.thumbnail === 'string') return x.thumbnail;
-  return x.thumbnail?.url || x.thumbnails?.[0]?.url || x.thumbnail_url || x.thumbnailUrl || '';
-}
-
-function normalizeDesign(d) {
-  if (!isObj(d)) return null;
-  const id = d.id || d.design_id || '';
-  if (!id) return null;
-  const editUrl = d.urls?.edit_url || d.edit_url || d.editUrl || d.url || '';
-  return {
-    id: String(id),
-    title: d.title || d.name || 'Untitled design',
-    thumbnailUrl: firstThumb(d),
-    editUrl,
-    viewUrl: d.urls?.view_url || d.view_url || d.viewUrl || d.url || editUrl,
-  };
-}
-
-function normalizeCandidate(c) {
-  if (!isObj(c)) return null;
-  const id = c.candidate_id || c.candidateId || c.id || '';
-  return id ? { id: String(id), thumbnailUrl: firstThumb(c) } : null;
-}
-
-function canvaError(prefix, e) {
-  const msg = String(e?.message || e || 'unknown error');
-  if (e?.code === 'not-connected' || /sign-in expired|Connect Canva|Reconnect Canva/i.test(msg)) return e instanceof Error ? e : err('', msg);
-  if (/license_required/i.test(msg)) return err('', `${prefix}: this design uses premium Canva elements your plan can't export.`);
-  return err('', `${prefix}: ${msg.replace(/^Canva:?\s*/, '')}`);
-}
-
-function pickDesignType(tool) {
-  const prop = schemaProps(tool).props.design_type;
-  if (!prop) return undefined;
-  const options = Array.isArray(prop.enum) ? prop.enum : [];
-  if (!options.length) return 'instagram_post';
-  return CANVA_TYPE_FALLBACKS.find((o) => options.includes(o)) || options[0];
-}
-
-async function canvaGetDesign(designId) {
-  const tool = await canvaTool('get');
-  const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, canvaArgs(tool, { design_id: designId })));
-  return normalizeDesign(findKey(parsed.json, ['design'], isObj) || parsed.data);
-}
-
-async function canvaGenerate(prompt) {
-  const tool = await canvaTool('generate');
-  const args = canvaArgs(tool, { [mainTextProp(tool, 'query')]: prompt, design_type: pickDesignType(tool) });
-  const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, args));
-  const job = findKey(parsed.json, ['job'], isObj);
-  const jobId = job?.id || findKey(parsed.json, ['job_id', 'jobId'], (v) => typeof v === 'string' && v) || null;
-  const list = findKey(parsed.json, ['generated_designs', 'candidates'], Array.isArray) || [];
-  const candidates = list.map(normalizeCandidate).filter(Boolean);
-  const design = normalizeDesign(findKey(parsed.json, ['design_summary', 'design'], isObj));
-  if (!candidates.length && !design) {
-    const status = String(job?.status || '').toLowerCase();
-    if (status && status !== 'success') {
-      throw err('', status === 'failed' ? (job?.error?.message || 'generation failed.') : 'Canva is still working on it. Try again in a moment.');
-    }
-    throw err('', parsed.text ? clip(parsed.text, 240) : 'Canva returned no designs.');
-  }
-  return { jobId, candidates, design };
-}
-
-async function canvaCreateFromCandidate(candidateId, jobId) {
-  const tool = await canvaTool('fromCandidate');
-  const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, canvaArgs(tool, { job_id: jobId, candidate_id: candidateId })));
-  const design = normalizeDesign(findKey(parsed.json, ['design_summary', 'design'], isObj) || parsed.data);
-  if (!design) throw err('', parsed.text ? clip(parsed.text, 200) : 'Canva did not return the new design.');
-  return design;
-}
-
-async function canvaExportPng(designId) {
-  const tool = await canvaTool('export');
-  const { props } = schemaProps(tool);
-  const fmt = props.format || {};
-  const fmtType = Array.isArray(fmt.type) ? fmt.type[0] : fmt.type;
-  let format = { type: 'png' };
-  if (fmtType === 'string' || Array.isArray(fmt.enum)) {
-    format = (fmt.enum || []).find((x) => String(x).toLowerCase() === 'png') || 'png';
-  } else if (fmt.properties?.pages) {
-    format = { type: 'png', pages: [1] };
-  }
-  const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, canvaArgs(tool, { design_id: designId, format })));
-  const job = findKey(parsed.json, ['job'], isObj) || (isObj(parsed.data) ? parsed.data : {});
-  const rawUrls = job.urls || findKey(parsed.json, ['urls', 'download_urls', 'exports'], Array.isArray) || [];
-  let urls = rawUrls.map((u) => (typeof u === 'string' ? u : u?.url)).filter((u) => typeof u === 'string' && /^https:/.test(u));
-  if (!urls.length) urls = parsed.urls.filter((u) => /^https:/.test(u) && /export|download|\.png(\?|$)/i.test(u));
-  if (!urls.length && parsed.images[0]) urls = [parsed.images[0].src];
-  if (!urls.length) {
-    const status = String(job.status || '').toLowerCase();
-    if (status && status !== 'success') {
-      throw err('', status === 'failed' ? (job.error?.message || job.error?.code || 'export failed.') : 'Canva is still exporting. Try again in a moment.');
-    }
-    throw err('', parsed.text ? clip(parsed.text, 240) : 'Canva returned no export link.');
-  }
-  return urls[0];
-}
-
-async function createWithCanva(prompt) {
-  let design;
-  try {
-    const gen = await canvaGenerate(prompt);
-    design = gen.design;
-    if (!design) {
-      if (!gen.jobId || !gen.candidates[0]) throw err('', 'Canva returned no design to use.');
-      design = await canvaCreateFromCandidate(gen.candidates[0].id, gen.jobId);
-    }
-  } catch (e) {
-    throw canvaError('Canva could not make a design', e);
-  }
-  let src = '';
-  try {
-    src = await canvaExportPng(design.id);
-  } catch (e) {
-    let thumb = design.thumbnailUrl || '';
-    if (!thumb) {
-      try { thumb = (await canvaGetDesign(design.id))?.thumbnailUrl || ''; } catch { /* fall through */ }
-    }
-    if (!thumb) throw canvaError('Canva export failed', e);
-    console.warn('[Lens] Canva export failed; using the design thumbnail', e);
-    src = thumb;
-  }
-  // Canva's links expire, so keep the image itself. When Canva's host does not allow that, keep the design id
-  // and export again right before publishing.
-  const inline = await postableImage(src);
-  const out = { src: inline || src, provider: 'Canva' };
-  if (!inline) out.designId = design.id;
-  const link = httpUrl(design.editUrl || design.viewUrl);
-  if (link) out.link = link;
-  return out;
-}
-
-/** Make an image for a post with Canva or Sculptex → { src, link?, provider }. */
+/** Make an image for a post with Sculptex → { src, link?, provider }. */
 export async function createVisual({ provider, prompt } = {}) {
   const p = providerName(provider);
-  if (p !== 'Canva' && p !== 'Sculptex') throw err('', 'Choose Canva or Sculptex.');
+  if (p !== 'Sculptex') throw err('', 'Visuals come from Sculptex.');
   requireConnected(p);
   const text = clip(str(prompt, 2000), 900);
   if (!text) throw err('', 'Describe the visual first.');
   try {
-    return p === 'Canva' ? await createWithCanva(text) : await renderWithSculptex(text);
+    return await renderWithSculptex(text);
   } catch (e) {
     emit(); // a sign-in that expired mid-call shows on the connection row
-    if (p === 'Sculptex' && !/^Sculptex/.test(e.message || '')) throw err(e.code || '', `Sculptex render failed: ${e.message}`);
+    if (!/^Sculptex/.test(e.message || '')) throw err(e.code || '', `Sculptex render failed: ${e.message}`);
     throw e;
   }
 }
@@ -1403,16 +1178,8 @@ export async function publish(post) {
   if (text.length > LINKEDIN_MAX_TEXT) {
     throw err('', `With its headline this post is ${text.length} characters; LinkedIn allows ${LINKEDIN_MAX_TEXT}. Shorten it and try again.`);
   }
-  let src = String(p.visual?.src || '');
+  const src = String(p.visual?.src || '');
   let imageSkipped = false;
-  // A Canva link kept instead of the image: export again for a fresh link while Canva is connected.
-  if (/^https:\/\//i.test(src) && p.visual?.designId && mcp.isConnected('canva')) {
-    try {
-      src = await canvaExportPng(String(p.visual.designId));
-    } catch (e) {
-      console.warn('[Lens] Canva re-export failed; posting the saved link', e);
-    }
-  }
   let imageUrl;
   if (/^https:\/\//i.test(src)) imageUrl = src;
   else if (src) {

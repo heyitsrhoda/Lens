@@ -6,8 +6,8 @@ import * as lens from './services/lens.js';
 const STORAGE_KEY = 'lens-v3';
 const BANNER_KEY = 'lens-v3-calendar-banner';
 const VIEW_KEY = 'lens-v3-view';
-const PROVIDERS = ['Canva', 'Sculptex', 'LinkedIn'];
-const VISUAL_PROVIDERS = [['Canva', 'Create with Canva', 'Creating with Canva…'], ['Sculptex', 'Render with Sculptex', 'Rendering with Sculptex…']];
+const PROVIDERS = ['Sculptex', 'LinkedIn'];
+const VISUAL_PROVIDERS = [['Sculptex', 'Render with Sculptex', 'Rendering with Sculptex…']];
 const QUESTIONS = [
   ['product', 'What does your company do?'],
   ['audience', 'Who do you want to reach?'],
@@ -16,7 +16,7 @@ const QUESTIONS = [
   ['voice', 'How should your posts sound? You can also mention topics to avoid.']
 ];
 const SLOTS = QUESTIONS.map(([key]) => key);
-const CLOSING = 'I have enough to save your brand. Connect LinkedIn to continue (Lens posts there). Sculptex for 3D visuals and Canva for design are optional.';
+const CLOSING = 'I have enough to save your brand. Connect LinkedIn to continue (Lens posts there). Sculptex for 3D visuals is optional.';
 const DM_REWRITE = 'The founder did not like this message. Write a clearly different version.';
 const DM_HINT = 'Copy the message, send it on LinkedIn, then mark it sent. Swipe left for a new version.';
 const POST_HINT = 'Swipe left to decline or right to approve and schedule.';
@@ -302,14 +302,10 @@ function connectionRows() {
     const who = str(provider === 'LinkedIn' ? (info.name || info.account) : (info.account || info.name), 120);
     const status = busy ? (connected ? 'Disconnecting…' : 'Connecting…') : connected ? (who ? `Connected · ${who}` : 'Connected') : 'Disconnected';
     const error = connectionErrors[provider] || str(info.error, 300);
-    const pending = !connected && !lens.isAvailable(provider);
     const label = provider === 'LinkedIn' && !connected ? `${provider}<span class="required-star" aria-hidden="true">*</span><span class="visually-hidden"> (required)</span>` : provider;
-    const shownStatus = pending ? 'Waiting on Canva to approve Lens' : status;
-    const button = pending
-      ? '<button class="btn ghost" type="button" disabled>Coming soon</button>'
-      : `<button class="btn ${connected ? 'ghost' : 'primary'}" data-action="connection" data-provider="${provider}" ${busy ? 'disabled aria-busy="true"' : ''}>${connected ? 'Disconnect' : 'Connect'}</button>`;
-    return `<div class="connection-wrap"><div class="connection"><div><strong>${label}</strong><small>${esc(shownStatus)}</small></div>
-      <div class="connection-actions">${button}</div></div>${error && !pending ? `<small class="connection-error" role="alert">${esc(error)}</small>` : ''}</div>`;
+    const button = `<button class="btn ${connected ? 'ghost' : 'primary'}" data-action="connection" data-provider="${provider}" ${busy ? 'disabled aria-busy="true"' : ''}>${connected ? 'Disconnect' : 'Connect'}</button>`;
+    return `<div class="connection-wrap"><div class="connection"><div><strong>${label}</strong><small>${esc(status)}</small></div>
+      <div class="connection-actions">${button}</div></div>${error ? `<small class="connection-error" role="alert">${esc(error)}</small>` : ''}</div>`;
   }).join('')}</div>`;
 }
 function onboardPage() {
@@ -342,8 +338,8 @@ function visualEditor(post) {
   const buttons = VISUAL_PROVIDERS.filter(([provider]) => live[provider]?.connected).map(([provider, label]) =>
     `<button class="btn" type="button" data-action="create-visual" data-provider="${provider}" data-post-id="${esc(post.id)}" ${visualBusy ? 'disabled' : ''}>${visualBusy?.provider === provider && visualBusy.id === post.id ? 'Working…' : label}</button>`);
   if (safeImage(post.visual?.src)) buttons.push(`<button class="btn ghost" type="button" data-action="remove-visual" data-post-id="${esc(post.id)}" ${visualBusy ? 'disabled' : ''}>Remove visual</button>`);
-  const hint = !live.Canva?.connected && !live.Sculptex?.connected
-    ? '<p class="muted visual-hint">Connect Canva or Sculptex in <button class="link-button" type="button" data-action="settings">Settings</button> to add a visual.</p>' : '';
+  const hint = !live.Sculptex?.connected
+    ? '<p class="muted visual-hint">Connect Sculptex in <button class="link-button" type="button" data-action="settings">Settings</button> to add a visual.</p>' : '';
   return `<div class="visual-row"><span class="visual-label">Visual</span>${visualBlock(post)}${buttons.length ? `<div class="tools">${buttons.join('')}</div>` : ''}${hint}</div>`;
 }
 function sourceLink(post) {
@@ -509,7 +505,7 @@ function settingsPage() {
   <div class="settings-block"><h2>Connections</h2><p class="muted">Manage your connections.</p>${connectionRows()}</div>
   <div class="settings-block"><h2>Brand memory</h2><p class="muted">${esc(state.brand.name)} · ${esc(state.brand.cadence)} posts per week</p><div class="tools"><button class="btn" data-action="download">Download brand file</button><button class="btn" data-action="upload">Upload brand file</button><button class="btn" data-action="download-logo">Download logo</button><input id="brand-upload" aria-label="Upload brand file" type="file" accept=".json,application/json" hidden></div></div>
   <div class="settings-block"><h2>Browser storage</h2><div class="tools"><button class="btn danger" data-action="request-erase">Erase local data</button></div></div>
-  <dialog id="erase-dialog" class="popup" aria-labelledby="erase-title"><div class="popup-head"><h2 id="erase-title">Erase local data?</h2></div><p>This clears your saved brand, drafts, schedule and chats from this browser, disconnects Canva, Sculptex and LinkedIn, and takes you back to onboarding.</p><div class="popup-actions"><button class="btn" data-action="cancel-erase" autofocus>Cancel</button><button class="btn danger" data-action="confirm-erase">Erase local data</button></div></dialog></section>`;
+  <dialog id="erase-dialog" class="popup" aria-labelledby="erase-title"><div class="popup-head"><h2 id="erase-title">Erase local data?</h2></div><p>This clears your saved brand, drafts, schedule and chats from this browser, disconnects Sculptex and LinkedIn, and takes you back to onboarding.</p><div class="popup-actions"><button class="btn" data-action="cancel-erase" autofocus>Cancel</button><button class="btn danger" data-action="confirm-erase">Erase local data</button></div></dialog></section>`;
 }
 function revisionComposer(id, postId, busy = false) {
   return `<form class="revise-form" id="${id}" data-keep="${esc(postId)}"><input type="hidden" name="post" value="${esc(postId)}"><input class="field" name="message" aria-label="Describe a change" placeholder="${busy ? 'Revising…' : 'Suggest a change'}" maxlength="500" required ${busy ? 'readonly aria-busy="true"' : ''}><button class="icon primary round" type="submit" aria-label="Apply revision" ${busy ? 'disabled' : ''}>${icon('send')}</button></form>
@@ -998,8 +994,7 @@ async function createVisualFor(id, provider, form) {
     const current = state === owner ? findEditablePost(id) : null;
     if (current) {
       const link = safeUrl(result.link);
-      const designId = str(result.designId == null ? '' : String(result.designId), 200);
-      current.visual = {src, provider: PROVIDERS.includes(result.provider) ? result.provider : provider, ...(link ? {link} : {}), ...(designId ? {designId} : {})};
+      current.visual = {src, provider: PROVIDERS.includes(result.provider) ? result.provider : provider, ...(link ? {link} : {})};
       save();
       notify(`${provider} visual added.`);
     }
@@ -1055,8 +1050,7 @@ function refreshPublishViews() {
 }
 function publishPayload(post) {
   const src = safeImage(post.visual?.src);
-  const designId = str(post.visual?.designId, 200);
-  return {id: post.id, title: post.title, copy: post.copy, ...(src ? {visual: {src, provider: post.visual.provider, ...(designId ? {designId} : {})}} : {})};
+  return {id: post.id, title: post.title, copy: post.copy, ...(src ? {visual: {src, provider: post.visual.provider}} : {})};
 }
 // One tab at a time posts: every open Lens tab runs autoPublish on the same saved schedule.
 function withPublishLock(task) {
