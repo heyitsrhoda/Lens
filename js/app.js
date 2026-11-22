@@ -1197,6 +1197,27 @@ async function applyRevision(form) {
   const post = scheduled ? getScheduledPost(selectedPostId) : state.posts[0];
   if (!request || !post || post.id !== id || decisionPending) return;
   if (scheduled ? scheduledBusy : (revisionBusy || rewritingId !== null || replyingId !== null)) return;
+  const wantsRender = renderRequest(request, post);
+  if (wantsRender) {
+    const reply = !isConnected('Sculptex') ? 'Connect Sculptex in Settings to add a render.'
+      : visualBusy ? 'A render is already running. Try again when it finishes.'
+      : wantsRender.subject ? `Rendering “${oneLine(wantsRender.subject, 80)}” with Sculptex. It shows up on the post when it’s ready.`
+      : 'Rendering a visual for this post with Sculptex. It shows up on the post when it’s ready.';
+    if (scheduled) {
+      post.revisionThread = [...(post.revisionThread || []), {role: 'user', text: request}, {role: 'agent', text: reply}].slice(-16);
+      resetForms.add('scheduled-revise');
+      save();
+    } else if (!isConnected('Sculptex') || visualBusy) {
+      revisionError = reply;
+    } else {
+      revisionError = '';
+      revising = false;
+      notify(reply);
+    }
+    render();
+    if (isConnected('Sculptex') && !visualBusy) createVisualFor(post.id, 'Sculptex', scheduled ? main.querySelector('#scheduled-edit') : null, wantsRender.subject);
+    return;
+  }
   const owner = state;
   const editor = scheduled ? main.querySelector('#scheduled-edit') : null;
   const originalCopy = editor?.querySelector('[name=copy]')?.value.trim() || post.copy;
@@ -1298,18 +1319,35 @@ async function brainstorm(value) {
 
 // ---------------------------------------------------------------- visuals
 
-function visualPrompt(title, copy, post) {
-  const brand = state.brand || {};
+function visualPrompt(title, copy, post, subject = '') {
+  if (subject) return `${oneLine(subject, 400)}. One engineered, 3D-printable part; give it sensible overall dimensions in mm and 1–3 clear features.`;
+  if (post.visual3d?.prompt) return oneLine(post.visual3d.prompt, 600);
   return [
-    `A LinkedIn post visual for ${brand.name || 'a startup'}.`,
-    post.visual3d?.prompt ? `Scene: ${oneLine(post.visual3d.prompt, 500)}` : post.visualIdea ? `Idea: ${post.visualIdea}.` : '',
-    `Headline: ${title}.`,
-    `Post: ${oneLine(copy, 500)}`,
-    brand.voice ? `Tone: ${oneLine(brand.voice, 120)}.` : '',
-    'Clean, modern composition with little or no text.'
-  ].filter(Boolean).join(' ');
+    `One simple engineered, 3D-printable part that illustrates this LinkedIn post${post.visualIdea ? ` (idea: ${oneLine(post.visualIdea, 160)})` : ''}.`,
+    `Post headline: ${oneLine(title, 160)}.`,
+    'Give its overall dimensions in mm and 1–3 features (holes, fillets, slots). No people, scenes, text or logos.'
+  ].join(' ');
 }
-async function createVisualFor(id, provider, form) {
+
+// "add a render", "make a 3D render of a cable clip", "can you add a visual" → a Sculptex render, not a text edit.
+const RENDER_WORDS = /\b(render|renders|3d|3-d|three[- ]d|visual|image|picture|illustration|sculptex)\b/i;
+const RENDER_VERBS = /\b(add|make|create|generate|give|include|put|attach|show|want|need|render|do)\b/i;
+const RENDER_REMOVE = /\b(remove|delete|drop|without|no)\b[^.]*\b(render|visual|image|picture)/i;
+function renderRequest(request, post) {
+  if (['dm', 'reply'].includes(post.kind)) return null;
+  if (!RENDER_WORDS.test(request) || !RENDER_VERBS.test(request) || RENDER_REMOVE.test(request)) return null;
+  const subject = request
+    .replace(/^\s*(?:please\s+|can you\s+|could you\s+|i(?:'d| would)? (?:like|want)\s+(?:you to\s+)?)*/i, '')
+    .replace(/^(?:add|make|create|generate|give (?:it|this|me)?|include|put|attach|show|do|render)\s+/i, '')
+    .replace(/^(?:a|an|the|some)\s+/i, '')
+    .replace(/^(?:3d|3-d|three[- ]d|sculptex)?\s*(?:render|visual|image|picture|illustration|model)s?\b\s*/i, '')
+    .replace(/^(?:of|showing|with|for|that shows)\s+/i, '')
+    .replace(/\s*(?:to|on|for) (?:the|this) post\.?$/i, '')
+    .replace(/[.!?]+$/, '')
+    .trim();
+  return {subject: subject.split(/\s+/).length >= 2 ? subject : ''};
+}
+async function createVisualFor(id, provider, form, subject = '') {
   if (visualBusy || !VISUAL_PROVIDERS.some(([name]) => name === provider)) return;
   const post = findEditablePost(id);
   if (!post) return;
@@ -1319,7 +1357,7 @@ async function createVisualFor(id, provider, form) {
   visualBusy = {id, provider};
   refresh();
   try {
-    const result = await lens.createVisual({provider, prompt: visualPrompt(title, copy, post), effort: clampEffort(post.visual3d?.effort)});
+    const result = await lens.createVisual({provider, prompt: visualPrompt(title, copy, post, subject), effort: clampEffort(post.visual3d?.effort)});
     const src = safeImage(result?.src);
     if (!src) throw new Error(`${provider} didn’t return an image.`);
     const current = state === owner ? findEditablePost(id) : null;
