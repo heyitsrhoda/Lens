@@ -4,7 +4,7 @@
     python3 dev/serve.py            # http://127.0.0.1:8000
     PORT=8080 python3 dev/serve.py
     YOU_API_KEY=... OPENROUTER_API_KEY=... python3 dev/serve.py   # same env vars as the Vercel deployment
-    OPENROUTER_MODEL=anthropic/claude-haiku-5.5 ...                # optional; default anthropic/claude-sonnet-5.5
+    OPENROUTER_MODEL=anthropic/claude-haiku-5.5 ...                # optional; default google/gemma-4-31b-it:free
 
 Serves the repo root as static files (correct MIME types for ES modules) and emulates the
 Vercel functions api/you.js and api/ai.js so live mode works locally:
@@ -45,7 +45,8 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 SEARCH_URL = "https://ydc-index.io/v1/search"
 EXTRACT_URL = "https://ydc-index.io/v1/extract"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "anthropic/claude-sonnet-5.5"
+DEFAULT_MODEL = "google/gemma-4-31b-it:free"
+FREE_FALLBACK = "openrouter/free"
 
 MAX_BODY = 64 * 1024
 AI_MAX_BODY = 200 * 1024
@@ -210,7 +211,10 @@ def ai_payload(body):
         if not _num(mt):
             raise RelayError(400, '"maxTokens" must be a number.', code="invalid")
         max_tokens = int(min(8000, max(64, round(mt))))
-    payload = {"model": ai_model(), "messages": messages, "max_tokens": max_tokens, "stream": False}
+    primary = ai_model()
+    payload = {"model": primary, "messages": messages, "max_tokens": max_tokens, "stream": False}
+    if primary.endswith(":free"):
+        payload["models"] = [primary, FREE_FALLBACK]
     t = body.get("temperature")
     if t is not None:
         if not _num(t):

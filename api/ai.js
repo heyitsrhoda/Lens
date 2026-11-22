@@ -5,7 +5,7 @@
 //
 // Request body: { system?: string, messages: [{ role: 'user'|'assistant', content: string }], maxTokens?, temperature? }
 //   - max_tokens is clamped to 64..8000 (default 1500); temperature to 0..1.5 (sent only when given).
-//   - The model is fixed by the deployment: env OPENROUTER_MODEL, else 'anthropic/claude-sonnet-5.5'.
+//   - The model is fixed by the deployment: env OPENROUTER_MODEL, else the free 'google/gemma-4-31b-it:free'.
 //     Callers cannot pick a model (keeps this from being an open proxy for any model on the account).
 //   - Body limit 200 KB. Upstream timeout 55 s.
 //

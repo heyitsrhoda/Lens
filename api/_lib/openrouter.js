@@ -8,12 +8,14 @@
 //   errors:  { error: { message, code } } with HTTP 400/401/402 (credits)/403/408/429/502/503; errors after generation
 //            started can arrive inside an HTTP 200 (top-level `error`, or finish_reason 'error' with choices[0].error).
 //
-// The model is fixed by the deployment (env OPENROUTER_MODEL, else 'anthropic/claude-sonnet-5.5'); callers cannot pick one.
+// The model is fixed by the deployment (env OPENROUTER_MODEL, else the free 'google/gemma-4-31b-it:free'); callers cannot pick one.
+// Free models also get OpenRouter's free router as a fallback (OpenRouter `models` routing) for when the primary is busy.
 // Every call is billed to OPENROUTER_API_KEY, so use a key with a credit limit set in OpenRouter (per-key limit).
 // Never logs keys or bodies.
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_MODEL = 'anthropic/claude-sonnet-5.5';
+const DEFAULT_MODEL = 'google/gemma-4-31b-it:free';
+const FREE_FALLBACK = 'openrouter/free';
 
 export const AI_MAX_BODY = 200 * 1024;
 const TIMEOUT_MS = 55000;
@@ -103,7 +105,9 @@ export function buildPayload(body) {
     if (!Number.isFinite(n)) throw new AiError(400, '"maxTokens" must be a number.', 'invalid');
     maxTokens = clamp(Math.round(n), MIN_MAX_TOKENS, MAX_MAX_TOKENS);
   }
-  const payload = { model: model(), messages, max_tokens: maxTokens, stream: false };
+  const primary = model();
+  const payload = { model: primary, messages, max_tokens: maxTokens, stream: false };
+  if (primary.endsWith(':free')) payload.models = [primary, FREE_FALLBACK];
   if (body.temperature !== undefined && body.temperature !== null) {
     const t = Number(body.temperature);
     if (typeof body.temperature !== 'number' || !Number.isFinite(t)) throw new AiError(400, '"temperature" must be a number.', 'invalid');
