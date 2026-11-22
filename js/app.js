@@ -1428,6 +1428,7 @@ function resetRequested() {
   } catch {}
   forgetView();
   resetLocal(structuredClone(INITIAL));
+  view = 'entry';
   return true;
 }
 function boot() {
