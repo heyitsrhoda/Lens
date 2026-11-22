@@ -16,7 +16,7 @@ const QUESTIONS = [
   ['voice', 'How should your posts sound? You can also mention topics to avoid.']
 ];
 const SLOTS = QUESTIONS.map(([key]) => key);
-const CLOSING = 'I have enough to save your brand. Connect Canva for design, Sculptex for 3D visuals, and LinkedIn for scheduling, or continue without connecting.';
+const CLOSING = 'I have enough to save your brand. Connect LinkedIn to continue (Lens posts there). Sculptex for 3D visuals and Canva for design are optional.';
 const DM_REWRITE = 'The founder did not like this message. Write a clearly different version.';
 const DM_HINT = 'Copy the message, send it on LinkedIn, then mark it sent. Swipe left for a new version.';
 const POST_HINT = 'Swipe left to decline or right to approve and schedule.';
@@ -302,8 +302,14 @@ function connectionRows() {
     const who = str(provider === 'LinkedIn' ? (info.name || info.account) : (info.account || info.name), 120);
     const status = busy ? (connected ? 'Disconnecting…' : 'Connecting…') : connected ? (who ? `Connected · ${who}` : 'Connected') : 'Disconnected';
     const error = connectionErrors[provider] || str(info.error, 300);
-    return `<div class="connection-wrap"><div class="connection"><div><strong>${provider}</strong><small>${esc(status)}</small></div>
-      <div class="connection-actions"><button class="btn ${connected ? 'ghost' : 'primary'}" data-action="connection" data-provider="${provider}" ${busy ? 'disabled aria-busy="true"' : ''}>${connected ? 'Disconnect' : 'Connect'}</button></div></div>${error ? `<small class="connection-error" role="alert">${esc(error)}</small>` : ''}</div>`;
+    const pending = !connected && !lens.isAvailable(provider);
+    const label = provider === 'LinkedIn' && !connected ? `${provider} <span class="required-tag">Required</span>` : provider;
+    const shownStatus = pending ? 'Waiting on Canva to approve Lens' : status;
+    const button = pending
+      ? '<button class="btn ghost" type="button" disabled>Coming soon</button>'
+      : `<button class="btn ${connected ? 'ghost' : 'primary'}" data-action="connection" data-provider="${provider}" ${busy ? 'disabled aria-busy="true"' : ''}>${connected ? 'Disconnect' : 'Connect'}</button>`;
+    return `<div class="connection-wrap"><div class="connection"><div><strong>${label}</strong><small>${esc(shownStatus)}</small></div>
+      <div class="connection-actions">${button}</div></div>${error && !pending ? `<small class="connection-error" role="alert">${esc(error)}</small>` : ''}</div>`;
   }).join('')}</div>`;
 }
 function onboardPage() {
@@ -315,7 +321,9 @@ function onboardPage() {
     : chatTurn(m.role, m.text)).join('');
   const thread = messages + (onboardBusy ? typingTurn() : '') + (complete ? connectionRows() : '');
   const footer = complete
-    ? '<div class="onboard-actions"><button class="btn primary" data-action="finish-onboard">Save brand &amp; open posts →</button></div>'
+    ? (getConnections().LinkedIn?.connected
+      ? '<div class="onboard-actions"><button class="btn primary" data-action="finish-onboard">Save brand &amp; open posts →</button></div>'
+      : '<div class="onboard-actions"><small class="muted onboard-required">Connect LinkedIn to continue.</small><button class="btn primary" data-action="finish-onboard" disabled>Save brand &amp; open posts →</button></div>')
     : chatComposer('onboard-form', 'Reply to Lens', onboardBusy, 'onboard');
   return chatWorkspace('Onboarding', 'Onboarding conversation', thread, footer);
 }
@@ -645,7 +653,7 @@ async function onboardAnswer(value, {retry = false} = {}) {
     const reply = str(result?.reply, 4000);
     if (filled && (result?.done || setup.filledTurns > 1)) {
       setup.complete = true;
-      setup.messages.push({role: 'agent', text: reply && /canva/i.test(reply) ? reply : (reply ? reply + '\n\n' : '') + CLOSING});
+      setup.messages.push({role: 'agent', text: reply && /linkedin/i.test(reply) ? reply : (reply ? reply + '\n\n' : '') + CLOSING});
     } else {
       setup.messages.push({role: 'agent', text: reply || nextQuestion(setup.answers)});
     }
@@ -660,6 +668,7 @@ async function onboardAnswer(value, {retry = false} = {}) {
 function finishOnboard() {
   const setup = state.onboarding;
   if (!setup || !setup.complete) return;
+  if (!getConnections().LinkedIn?.connected) {notify('Connect LinkedIn to continue.'); return;}
   const scan = setup.scan || {};
   const brand = {name: scan.name || setup.name, url: setup.url};
   for (const key of SLOTS) brand[key] = setup.answers[key] ?? DEFAULTS[key];

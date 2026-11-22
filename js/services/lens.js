@@ -37,7 +37,7 @@ const SLOTS = [
   ['cadence', 'How often should Lens post? For example, 3 times a week.'],
   ['voice', 'How should your posts sound? You can also mention topics to avoid.'],
 ];
-const FINAL_REPLY = 'I have enough to save your brand. Connect Canva for design, Sculptex for 3D visuals, and LinkedIn for scheduling, or continue without connecting.';
+const FINAL_REPLY = 'I have enough to save your brand. Connect LinkedIn to continue (Lens posts there). Sculptex for 3D visuals and Canva for design are optional.';
 const LINKEDIN_REASONS = {
   cancelled: 'LinkedIn sign-in was cancelled.',
   state: 'LinkedIn sign-in expired or was opened in another tab. Try connecting again.',
@@ -396,9 +396,20 @@ try {
 }
 
 /** Connect a provider. Throws code 'redirect' when the page is navigating to the provider's sign-in. */
+// Canva's MCP only accepts sign-in return addresses it has allowlisted (localhost, claude.ai, …).
+// lensbeta.vercel.app is not on that list yet; flip this once Canva approves Lens
+// (request: https://www.canva.dev/docs/mcp/access/).
+const CANVA_APPROVED = false;
+
+/** Sync: false when a provider can't be connected from this deployment yet. */
+export function isAvailable(provider) {
+  return providerName(provider) !== 'Canva' || CANVA_APPROVED;
+}
+
 export async function connect(provider) {
   const p = providerName(provider);
   if (!p) throw err('', `Unknown provider: ${provider}`);
+  if (!isAvailable(p)) throw err('not-approved', 'Canva hasn’t approved Lens for sign-in yet.');
   if (p === 'LinkedIn') {
     await linkedin.connect(); // navigates away (throws 'redirect') or throws a readable error
     return connections().LinkedIn;
@@ -600,7 +611,7 @@ Rules:
 - One message may answer several slots; record every slot it clearly answers. The founder may also correct an earlier answer.
 - Never invent answers.
 - Replies are brief (1–2 sentences, max 40 words), friendly, plain text. No markdown, no lists, no emoji.
-- When all five slots are filled, set done to true and reply with a short wrap-up: you have enough to save the brand, and they can connect Canva for design, Sculptex for 3D visuals and LinkedIn for scheduling, or continue without connecting.`;
+- When all five slots are filled, set done to true and reply with a short wrap-up: you have enough to save the brand, and they need to connect LinkedIn to continue (Lens posts there), and Sculptex for 3D visuals and Canva for design are optional.`;
 
   const prompt = `Company website: ${str(site, 300) || 'unknown'}
 Website scan: ${scanText}

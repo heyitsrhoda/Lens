@@ -9,7 +9,7 @@ Web search and page reading use You.com (`api/you.js`). Every AI call (site summ
 ## The flow
 
 1. **Company URL.** Lens reads your site while the glass-lens animation plays, then opens the onboarding chat.
-2. **Onboarding chat.** Lens's AI agent confirms what your company does and asks about your audience, goal, posting cadence (1 to 14 posts a week) and voice, one question at a time. You can connect Canva, Sculptex and LinkedIn at the end.
+2. **Onboarding chat.** Lens's AI agent confirms what your company does and asks about your audience, goal, posting cadence (1 to 14 posts a week) and voice, one question at a time. At the end you connect LinkedIn (required, since Lens posts there) and optionally Sculptex and Canva.
 3. **Stack.** Lens drafts posts grounded in fresh You.com search results about your field (trends, news, events) and mixes in DM drafts.
    - Posts: swipe right or press the check to approve and schedule. Swipe left or press the X to decline. Use the pencil to edit or add a visual with Canva or Sculptex, and the chat bubble to ask Lens for a revision.
    - DMs: press **Copy**, send the message yourself on LinkedIn, then press **I sent this** or swipe right. Press **I don’t like this** or swipe left for a new version. Lens never sends DMs.
@@ -21,6 +21,7 @@ Web search and page reading use You.com (`api/you.js`). Every AI call (site summ
 
 - Your brand, drafts, schedule and chats live in your browser's `localStorage` (key `lens-v3`). **Erase local data** clears them and disconnects everything.
 - Connections are session-only. Canva and Sculptex (MCP servers with OAuth) are kept in `sessionStorage`. LinkedIn sign-in is kept in an HttpOnly session cookie that the browser drops when the session ends, so the LinkedIn token never reaches page scripts.
+- Canva's MCP only accepts sign-in return addresses Canva has allowlisted. Until Canva approves your domain (request at https://www.canva.dev/docs/mcp/access/), the Canva row shows "Coming soon"; set `CANVA_APPROVED = true` in `js/services/lens.js` once approved.
 - **Scheduled posts send only while Lens is open.** There is no server-side scheduler. Lens checks every 30 seconds, and when you return to the tab, for scheduled posts that are due. If LinkedIn is not connected, due posts wait and send once you connect. With LinkedIn connected, **Post now** on a scheduled post sends it right away.
 
 ## Deploy on Vercel
