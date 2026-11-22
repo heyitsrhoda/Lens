@@ -18,9 +18,7 @@ const QUESTIONS = [
 ];
 const SLOTS = QUESTIONS.map(([key]) => key);
 const CLOSING = 'I have enough to save your brand. Connect LinkedIn to continue (Lens posts there). Sculptex for 3D visuals is optional.';
-const DM_REWRITE = 'The founder did not like this message. Write a clearly different version.';
-const DM_HINT = 'Copy the message, send it to them where they posted, then mark it sent. Swipe left for a new version.';
-const REPLY_REWRITE = 'The founder did not like this reply. Write a clearly different version.';
+const DM_HINT = 'Copy the message, send it to them where they posted, then mark it sent. Swipe left to skip it.';
 const REPLY_HINT_LINKEDIN = 'Approve to post this reply on LinkedIn. Swipe left to skip it.';
 const REPLY_MANUAL_CODES = ['unsupported', 'not-found', 'forbidden', 'not-linkedin', 'rejected', 'invalid'];
 const REPLY_HINT = 'Copy the reply, post it in the thread, then mark it sent. Swipe left to skip it.';
@@ -582,7 +580,7 @@ function labeledDecisions(declineTitle, approveLabel, approveTitle, hint, disabl
 }
 function decisionButtons(post) {
   const disabled = rewritingId !== null || replyingId !== null || revisionBusy ? 'disabled' : '';
-  if (post.kind === 'dm') return labeledDecisions('Write a new version', 'I sent this', 'Mark as sent', DM_HINT, disabled);
+  if (post.kind === 'dm') return labeledDecisions('Remove from stack', 'I sent this', 'Mark as sent', DM_HINT, disabled);
   if (isLinkedInReply(post)) return labeledDecisions('Remove from stack', 'Post reply', 'Post this reply on LinkedIn', REPLY_HINT_LINKEDIN, disabled);
   if (post.kind === 'reply') return labeledDecisions('Remove from stack', 'I sent this', 'Mark as sent', REPLY_HINT, disabled);
   return `<div class="decisions">
@@ -1097,7 +1095,7 @@ function commitDecision(approve, id) {
     notify('Scheduled for ' + formatSlot(slot) + '.');
   } else {
     state.journal.unshift({...post, status: 'Declined'});
-    notify(post.kind === 'reply' ? 'Reply removed from your stack.' : 'Post declined.');
+    notify(post.kind === 'reply' ? 'Reply removed from your stack.' : post.kind === 'dm' ? 'Message removed from your stack.' : 'Post declined.');
   }
   save();
   drag = null;
@@ -1110,11 +1108,6 @@ function decide(approve, card = main.querySelector('#post-card')) {
   if (view !== 'review' || editing || decisionPending || !state.posts.length || rewritingId !== null || replyingId !== null || revisionBusy) return;
   drag = null;
   const post = state.posts[0];
-  if (post.kind === 'dm' && !approve) {
-    if (card) paintSwipe(card, 0);
-    rewriteItem();
-    return;
-  }
   if (approve && isLinkedInReply(post)) {
     if (card) paintSwipe(card, 0);
     postReplyItem();
@@ -1201,41 +1194,6 @@ function replyManually() {
   save();
   refresh();
   main.querySelector('[data-action=copy-item]')?.focus({preventScroll: true});
-}
-async function rewriteItem() {
-  const post = state.posts[0];
-  if (!post || !['dm', 'reply'].includes(post.kind) || rewritingId !== null || replyingId !== null) return;
-  const owner = state;
-  const id = post.id;
-  rewritingId = id;
-  revisionError = '';
-  replyError = '';
-  render();
-  let result, failure;
-  const item = post.kind === 'reply'
-    ? {kind: 'reply', title: post.title, copy: post.copy, quote: post.quote, platform: post.platform}
-    : {kind: 'dm', title: post.title, copy: post.copy};
-  try {
-    result = await lens.revise({brand: state.brand, item, request: post.kind === 'reply' ? REPLY_REWRITE : DM_REWRITE});
-  } catch (error) {failure = error;}
-  rewritingId = null;
-  if (state !== owner) return;
-  const current = state.posts.find(item => item.id === id);
-  const copy = str(result?.copy, 3000);
-  if (failure) notify('Lens couldn’t write a new version. ' + endSentence(errorText(failure)));
-  else if (!copy) notify('Lens didn’t return a new version. Try again.');
-  else if (current && isLinkedInReply(current) && copy.length > REPLY_MAX) notify('Lens’s new version was too long for a LinkedIn reply. Try again.');
-  else if (current) {
-    current.copy = copy;
-    const title = str(result.title, 180);
-    if (title) current.title = title;
-    save();
-    notify('New version ready.');
-  }
-  if (view === 'review') {
-    refresh();
-    main.querySelector('#decline')?.focus({preventScroll: true});
-  }
 }
 async function copyText(text) {
   try {
