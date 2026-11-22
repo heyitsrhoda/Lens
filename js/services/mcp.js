@@ -1,11 +1,22 @@
-// Browser MCP client (Streamable HTTP transport + OAuth 2.1 with PKCE) — used for Sculptex only.
+// Browser MCP client (Streamable HTTP transport + OAuth 2.1 with PKCE, dynamic client registration).
+// Multi-server: every function takes a connection key ('sculptex' | 'canva'); state lives in state.connections[key].
+// No API keys anywhere — each server is just its MCP URL; sign-in is the server's own OAuth flow.
 //
-// Verified against the live server:
+// Sculptex, verified against the live server:
 //   POST <server>/mcp without a token → 401, WWW-Authenticate: Bearer resource_metadata="<origin>/.well-known/oauth-protected-resource"
 //   Protected resource metadata: { resource: "<origin>/mcp", authorization_servers: ["<origin>"], scopes_supported: ["mcp"] }
 //   Authorization server metadata: authorization_endpoint /oauth/authorize, token_endpoint /oauth/token,
 //     registration_endpoint /oauth/register, code_challenge_methods_supported ["S256"], token auth 'none' supported.
 //   CORS: Access-Control-Allow-Origin *, exposes WWW-Authenticate + Mcp-Session-Id, methods GET/POST/OPTIONS.
+//
+// Canva (https://mcp.canva.com/mcp), verified by probing:
+//   POST without a token → 401, WWW-Authenticate: Bearer resource_metadata="https://mcp.canva.com/.well-known/oauth-protected-resource/mcp"
+//   PRM (path-suffixed): { resource: "https://mcp.canva.com/mcp", authorization_servers: ["https://mcp.canva.com"],
+//     scopes_supported: [profile:read, design:*, folder:*, brandtemplate:*, comment:*, asset:*, brandkit:read, help:*] }
+//   AS: /authorize, /token, /register (DCR), PKCE S256, token auth 'none'.
+//   CORS reflects the Origin and allows Authorization/* headers, but sends NO Access-Control-Expose-Headers on
+//   the 401 — the browser cannot read WWW-Authenticate there, so discovery falls back to the path-suffixed
+//   well-known URL (which is the same document).
 //
 // Connection state (tokens, session id, tools, status) only lives in state.connections, which the
 // store persists to sessionStorage — closing the tab forgets it. The pending OAuth record also
@@ -14,8 +25,15 @@
 import { getState, setState, toast } from '../store.js';
 
 export const PROTOCOL_VERSION = '2025-06-18';
-export const DEFAULT_URLS = { sculptex: 'https://sculptex-git-main-jacksonschorr.vercel.app/mcp' };
-const LABELS = { sculptex: 'Sculptex' };
+export const DEFAULT_URLS = {
+  sculptex: 'https://sculptex-git-main-jacksonschorr.vercel.app/mcp',
+  canva: 'https://mcp.canva.com/mcp',
+};
+const LABELS = { sculptex: 'Sculptex', canva: 'Canva' };
+// Per-server OAuth scope overrides. Default: the PRM's scopes_supported joined by spaces.
+const SCOPE_OVERRIDES = {};
+// When a server advertises no scopes at all.
+const SCOPE_FALLBACK = { sculptex: 'mcp' };
 
 const PENDING_KEY = 'lens_mcp_pending_v1';
 const CLIENTS_KEY = 'lens_mcp_clients_v1';
@@ -37,10 +55,6 @@ class AuthRequiredError extends Error {
 
 // ---------------------------------------------------------------- state helpers
 
-function label(key) {
-  return LABELS[key] || key;
-}
-
 export function getConnection(key) {
   const c = getState().connections?.[key] || {};
   return {
@@ -51,7 +65,12 @@ export function getConnection(key) {
     auth: c.auth || null,
     sessionId: c.sessionId || null,
     error: c.error || '',
+    account: c.account || null,
   };
+}
+
+export function label(key) {
+  return LABELS[key] || key;
 }
 
 export function isConnected(key) {
@@ -417,7 +436,7 @@ async function registerClient(asMeta, redirect, scope) {
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
-      scope,
+      ...(scope ? { scope } : {}),
     }),
   }, 'Client registration');
   let body = null;
@@ -431,6 +450,15 @@ async function registerClient(asMeta, redirect, scope) {
   return client;
 }
 
+function scopeFor(key, prm, asMeta) {
+  if (SCOPE_OVERRIDES[key]) return SCOPE_OVERRIDES[key];
+  const supported = Array.isArray(prm?.scopes_supported) && prm.scopes_supported.length
+    ? prm.scopes_supported
+    : Array.isArray(asMeta?.scopes_supported) ? asMeta.scopes_supported : [];
+  const list = supported.filter((x) => typeof x === 'string' && x && !/\s/.test(x));
+  return list.length ? [...new Set(list)].join(' ') : SCOPE_FALLBACK[key] || '';
+}
+
 async function startOAuth(key, metaUrl) {
   const conn = getConnection(key);
   const prm = await discoverResource(conn.url, metaUrl);
@@ -440,8 +468,7 @@ async function startOAuth(key, metaUrl) {
   if (Array.isArray(methods) && methods.length && !methods.includes('S256')) {
     throw new Error(`${label(key)} does not support PKCE S256 sign-in.`);
   }
-  const supported = prm?.scopes_supported || asMeta.scopes_supported || [];
-  const scope = supported.includes('mcp') || !supported.length ? 'mcp' : supported.join(' ');
+  const scope = scopeFor(key, prm, asMeta);
   const resource = prm?.resource || conn.url;
   const redirect = redirectUri();
   const client = await registerClient(asMeta, redirect, scope);
@@ -468,7 +495,7 @@ async function startOAuth(key, metaUrl) {
   authUrl.searchParams.set('code_challenge', challenge);
   authUrl.searchParams.set('code_challenge_method', 'S256');
   authUrl.searchParams.set('state', state);
-  authUrl.searchParams.set('scope', scope);
+  if (scope) authUrl.searchParams.set('scope', scope);
   authUrl.searchParams.set('resource', resource);
 
   patchConn(key, { status: 'connecting', error: '' });
@@ -498,7 +525,7 @@ function authFromTokens(tokens, base) {
     refreshToken: tokens.refresh_token || base.refreshToken || null,
     expiresAt: tokens.expires_in ? Date.now() + Number(tokens.expires_in) * 1000 : null,
     tokenType: tokens.token_type || 'Bearer',
-    scope: tokens.scope || base.scope || 'mcp',
+    scope: tokens.scope || base.scope || '',
     clientId: base.clientId,
     clientSecret: base.clientSecret || null,
     tokenEndpoint: base.tokenEndpoint,
@@ -557,6 +584,7 @@ export async function connect(key, { interactive = true } = {}) {
     await initialize(key);
     const tools = await fetchTools(key);
     patchConn(key, { status: 'connected', tools, error: '', connectedAt: new Date().toISOString() });
+    runConnectedHooks(key);
     return getConnection(key);
   } catch (e) {
     if (e instanceof AuthRequiredError) {
@@ -636,6 +664,116 @@ export async function callTool(key, name, args = {}) {
     throw err;
   }
   return result || { content: [] };
+}
+
+const connectedHooks = new Set();
+
+/** Register fn(key) to run (fire-and-forget) after any server connects — including after an OAuth return. */
+export function onConnected(fn) {
+  connectedHooks.add(fn);
+  return () => connectedHooks.delete(fn);
+}
+
+function runConnectedHooks(key) {
+  for (const fn of connectedHooks) {
+    Promise.resolve()
+      .then(() => fn(key))
+      .catch((e) => console.warn(`[Lens] ${label(key)} post-connect hook failed`, e));
+  }
+}
+
+function normName(n) {
+  return String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Resolve a tool from the cached tools/list: first by exact name (ignoring case and -/_ separators, also allowing a
+ * server prefix such as "canva_generate_design"), in order of preference; then, if intents are given, by pickTool.
+ */
+export function findTool(key, preferredNames = [], intents = []) {
+  const tools = getConnection(key).tools;
+  if (!tools.length) return null;
+  for (const want of preferredNames) {
+    const w = normName(want);
+    if (!w) continue;
+    const hit = tools.find((t) => normName(t.name) === w) || tools.find((t) => normName(t.name).endsWith(w));
+    if (hit) return hit;
+  }
+  return intents.length ? pickTool(key, intents) : null;
+}
+
+function parseJsonLoose(text) {
+  const t = String(text || '').trim();
+  if (!t) return null;
+  const attempt = (x) => { try { return JSON.parse(x); } catch { return undefined; } };
+  let v = attempt(t);
+  if (v !== undefined) return v;
+  const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(t);
+  if (fence) {
+    v = attempt(fence[1].trim());
+    if (v !== undefined) return v;
+  }
+  for (const [open, close] of [['{', '}'], ['[', ']']]) {
+    const a = t.indexOf(open);
+    const b = t.lastIndexOf(close);
+    if (a !== -1 && b > a) {
+      v = attempt(t.slice(a, b + 1));
+      if (v !== undefined) return v;
+    }
+  }
+  return null;
+}
+
+function collectHttpUrls(value, out, depth = 0) {
+  if (depth > 8 || value == null) return;
+  if (typeof value === 'string') {
+    for (const u of value.match(/https?:\/\/[^\s"'<>)\]]+/g) || []) out.add(u.replace(/[.,;:]+$/, ''));
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const v of value) collectHttpUrls(v, out, depth + 1);
+    return;
+  }
+  if (typeof value === 'object') for (const v of Object.values(value)) collectHttpUrls(v, out, depth + 1);
+}
+
+/**
+ * Normalize an MCP tools/call result.
+ * → { data, json: [..every JSON value found], text, images: [{ src, mimeType }], links: [{ uri, name, mimeType }], urls: [..http urls] }
+ * data = structuredContent when present, else the first JSON value parsed from text/resource content.
+ */
+export function parseToolResult(result) {
+  const json = [];
+  const texts = [];
+  const images = [];
+  const links = [];
+  if (result?.structuredContent && typeof result.structuredContent === 'object') json.push(result.structuredContent);
+  for (const item of result?.content || []) {
+    if (!item) continue;
+    if (item.type === 'text' && typeof item.text === 'string') {
+      texts.push(item.text);
+      const parsed = parseJsonLoose(item.text);
+      if (parsed && typeof parsed === 'object') json.push(parsed);
+    } else if (item.type === 'image' && item.data) {
+      images.push({ src: `data:${item.mimeType || 'image/png'};base64,${item.data}`, mimeType: item.mimeType || 'image/png' });
+    } else if (item.type === 'resource_link' && item.uri) {
+      links.push({ uri: item.uri, name: item.name || item.title || '', mimeType: item.mimeType || '' });
+    } else if (item.type === 'resource' && item.resource) {
+      const r = item.resource;
+      if (r.blob && /^image\//.test(r.mimeType || '')) images.push({ src: `data:${r.mimeType};base64,${r.blob}`, mimeType: r.mimeType });
+      if (r.uri) links.push({ uri: r.uri, name: r.name || '', mimeType: r.mimeType || '' });
+      if (typeof r.text === 'string') {
+        texts.push(r.text);
+        const parsed = parseJsonLoose(r.text);
+        if (parsed && typeof parsed === 'object') json.push(parsed);
+      }
+    }
+  }
+  const urls = new Set();
+  for (const j of json) collectHttpUrls(j, urls);
+  for (const t of texts) collectHttpUrls(t, urls);
+  for (const l of links) if (/^https?:/.test(l.uri)) urls.add(l.uri);
+  return { data: json[0] || null, json, text: texts.join('\n\n').trim(), images, links, urls: [...urls] };
 }
 
 /** Pick the best tool for a list of intent words/phrases, by name and description match. */
@@ -761,5 +899,6 @@ export function disconnect(key) {
     error: '',
     serverInfo: null,
     instructions: '',
+    account: null,
   });
 }

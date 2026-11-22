@@ -7,14 +7,14 @@ Lens helps a founder build a following and find users:
 2. You.com finds recent public conversations where people describe the problem.
 3. Founder reviews ranked threads, quotes and source links.
 4. Branch A: draft a contextual reply or DM → approve/edit → send via LinkedIn MCP (or copy + open source link).
-5. Branch B: turn a recurring pain point into a post → attach a Canva/Figma visual with an optional Sculptex 3D render → preview → schedule.
+5. Branch B: turn a recurring pain point into a post → attach a Canva visual (real Canva MCP) or a Sculptex 3D render → preview → schedule.
 Plus: "Trending in your field" + "Founder events this week" on the dashboard, a sidebar, a floating Chat button (Claude, grounded in the app state).
 
 ## Hard constraints
 - **No databases, no accounts, no backend.** All app data lives in the browser (localStorage `lens_state_v1`).
 - **LinkedIn is MOCKED.** There is no real LinkedIn integration. "Connect LinkedIn" simulates an OAuth-style connect (short delay) and yields a fake profile from demo-data (`demo.linkedinProfile` = founder name/headline/avatar initials for the demo company). Sending a reply/DM or publishing a post "to LinkedIn" appends it to `state.linkedinFeed` (a mock feed shown in Schedule → 'Published' and as a LinkedIn-style card) and sets status sent/posted. Label it clearly in the UI as "LinkedIn (demo)". No real network calls for LinkedIn.
-- **Sculptex is REAL** — a genuine MCP server (`https://sculptex-git-main-jacksonschorr.vercel.app/mcp`, OAuth required, CORS `*`). mcp.js is only used for Sculptex.
-- **MCP connections are temporary.** Connection state for Sculptex (tokens, session id, tool list, status) lives ONLY in `sessionStorage` key `lens_mcp_v1` — never localStorage. Closing the tab forgets it; the user reconnects next time. store.js must exclude `connections` from the localStorage persist and instead persist it to sessionStorage. The mock LinkedIn connection is also session-only, for consistency.
+- **Sculptex is REAL** — a genuine MCP server (`https://sculptex-git-main-jacksonschorr.vercel.app/mcp`, OAuth required, CORS `*`). mcp.js serves the real MCP servers: Sculptex and Canva (`https://mcp.canva.com/mcp`, OAuth sign-in with dynamic client registration, no API key).
+- **MCP connections are temporary.** Connection state for Sculptex and Canva (tokens, session id, tool list, status) lives ONLY in `sessionStorage` key `lens_mcp_v1` — never localStorage. Closing the tab forgets it; the user reconnects next time. store.js must exclude `connections` from the localStorage persist and instead persist it to sessionStorage. The mock LinkedIn connection is also session-only, for consistency.
 - **Static site for GitHub Pages.** No build step, no Node, no server. Plain ES modules loaded by the browser. Every path is RELATIVE (`./js/app.js`, never `/js/app.js`) because Pages serves under `/<repo>/`.
 - React via esm.sh, JSX-free with `htm`. Only import third-party code through `js/lib.js`:
   ```js
@@ -57,7 +57,7 @@ js/views/discover.js           [views-a]  #/discover  ranked threads, quotes, so
 js/views/outreach.js           [views-b]  #/outreach  approval queue for replies/DMs (edit, approve, send, reject)
 js/views/studio.js             [views-b]  #/studio    post composer: pain point → post, visual, Sculptex render, preview
 js/views/schedule.js           [views-b]  #/schedule  week calendar + list of scheduled/posted posts
-js/views/connections.js        [views-c]  #/connections  LinkedIn MCP, Sculptex MCP, You.com key, Claude key, demo toggle
+js/views/connections.js        [views-c]  #/connections  LinkedIn (demo), Sculptex MCP, Canva MCP, You.com key, Claude key, demo toggle
 js/views/chat.js               [views-c]  exports ChatDrawer (rendered by app.js, not a route)
 README.md                      [core]
 ```
@@ -81,6 +81,7 @@ State shape (defaults built from demo-data on first load):
   connections: {            // persisted to sessionStorage 'lens_mcp_v1' ONLY (temporary)
     linkedin: { status: 'disconnected'|'connecting'|'connected', profile: null },   // MOCK
     sculptex: { url: 'https://sculptex-git-main-jacksonschorr.vercel.app/mcp', status: 'disconnected'|'connecting'|'connected'|'error', tools: [], auth: null, sessionId: null, error: '' },
+    canva: { url: 'https://mcp.canva.com/mcp', status, tools: [], auth: null, sessionId: null, error: '', account: null },   // REAL Canva MCP (OAuth, no API key)
   },
   linkedinFeed: [{ id, draftId, kind: 'post'|'reply'|'dm', body, visual?, to?: string /*thread author for dm/reply*/, threadUrl?, at: iso, reactions: number, comments: number }], // mock LinkedIn activity
   threads: [Thread], trends: [Trend], events: [Event], drafts: [Draft],
@@ -96,7 +97,7 @@ Event  = { id, title, start: iso, end: iso, location, format: 'in-person'|'virtu
 Draft  = { id, kind: 'reply'|'dm'|'post', threadId?: string, body: string, title?: string,
            status: 'pending'|'approved'|'scheduled'|'posted'|'sent'|'rejected', createdAt, updatedAt,
            scheduledFor?: iso, postedAt?: iso, channel: 'linkedin'|'copy',
-           visual?: { type: 'upload'|'canva'|'figma'|'sculptex', src?: string /*dataURL or image url*/, link?: string, caption?: string, renderUrl?: string },
+           visual?: { type: 'upload'|'canva'|'sculptex', src?: string /*dataURL or image url*/, link?: string /*Canva edit url*/, designId?: string /*Canva*/, caption?: string, renderUrl?: string },
            painPoint?: string, error?: string }
 ```
 Persist everything except `toasts`, `ui.loading` and `connections` (connections → sessionStorage). Data URLs from uploads can be large — catch QuotaExceededError and toast.
@@ -149,7 +150,7 @@ Direct browser call to `https://api.anthropic.com/v1/messages` with headers `x-a
 
 ## js/services/mcp.js — browser MCP client (Streamable HTTP + OAuth 2.1 PKCE)
 ```js
-export async function connect(key)          // key: 'sculptex' (only real MCP); reads state.connections[key].url
+export async function connect(key)          // key: 'sculptex' | 'canva' (both real MCP servers); reads state.connections[key].url
 export async function listTools(key)
 export async function callTool(key, name, args)   // returns MCP result {content:[...]}
 export function pickTool(key, intents)       // intents e.g. ['create_post','share','post'] → best tool by name/description match or null

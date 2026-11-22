@@ -10,8 +10,8 @@ import {
   findConversations,
   onboardingChat,
   generateSuggestions,
-  connectDesignTool,
-  disconnectDesignTool,
+  connectCanva,
+  disconnectCanva,
   connectLinkedIn,
   disconnectLinkedIn,
 } from '../services/lens.js';
@@ -721,37 +721,6 @@ function AudienceStep({ ob }) {
 // ---------------------------------------------------------------------------
 // step 4 — connect
 
-const DESIGN_TOOLS = [
-  { id: 'canva', name: 'Canva', icon: 'palette', blurb: 'Templates & quick social graphics', hue: 'canva' },
-  { id: 'figma', name: 'Figma', icon: 'layers', blurb: 'Frames from your design files', hue: 'figma' },
-];
-
-function DesignTile({ tool, design, onPick }) {
-  const selected = design.tool === tool.id && design.status !== 'disconnected';
-  const connecting = selected && design.status === 'connecting';
-  const connected = selected && design.status === 'connected';
-  return html`<button
-    type="button"
-    role="radio"
-    aria-checked=${selected ? 'true' : 'false'}
-    className=${cx('start-tile', `start-tile--${tool.hue}`, selected && 'is-selected')}
-    onClick=${() => onPick(tool.id)}
-    disabled=${design.status === 'connecting'}
-  >
-    <span className="start-tile-glyph" aria-hidden="true"><${Icon} name=${tool.icon} size=${22} /></span>
-    <span className="start-tile-name">${tool.name} <span className="start-demo">demo</span></span>
-    <span className="start-tile-blurb">${tool.blurb}</span>
-    <span className="start-tile-state">
-      ${connecting
-        ? html`<${Spinner} size=${12} /> Connecting…`
-        : connected
-          ? html`<${Icon} name="check" size=${13} strokeWidth=${2.4} /> Connected`
-          : 'Select'}
-    </span>
-    <span className="start-tile-radio" aria-hidden="true"></span>
-  </button>`;
-}
-
 function ConnectRow({ icon, iconClass, title, badge, desc, status, children }) {
   return html`<div className="start-conn">
     <span className=${cx('start-conn-icon', iconClass)} aria-hidden="true"><${Icon} name=${icon} size=${20} /></span>
@@ -766,19 +735,21 @@ function ConnectRow({ icon, iconClass, title, badge, desc, status, children }) {
 
 function ConnectStep() {
   const conn = useStore((s) => s.connections) || {};
-  const design = conn.design || { tool: null, status: 'disconnected' };
+  const canva = conn.canva || { status: 'disconnected' };
   const sculptex = conn.sculptex || { status: 'disconnected' };
   const linkedin = conn.linkedin || { status: 'disconnected' };
   const profile = useProfile();
   const [busy, setBusy] = useState('');
 
-  const pickDesign = async (tool) => {
-    if (design.status === 'connecting') return;
+  const connectCanvaNow = async () => {
+    setBusy('canva');
     try {
-      if (design.tool === tool && design.status === 'connected') await disconnectDesignTool();
-      else await connectDesignTool(tool);
+      const res = await connectCanva();
+      if (res && res.redirecting) return; // leaving for Canva sign-in; state.onboarding.step brings us back here
     } catch (e) {
-      toast(`Design tool: ${e.message || e}`, 'error');
+      toast(`Canva: ${e.message || e}`, 'error');
+    } finally {
+      setBusy('');
     }
   };
 
@@ -808,7 +779,9 @@ function ConnectStep() {
   };
 
   const sxConnecting = busy === 'sculptex' || sculptex.status === 'connecting';
-  const anyConnected = design.status === 'connected' || sculptex.status === 'connected' || linkedin.status === 'connected';
+  const cvConnecting = busy === 'canva' || canva.status === 'connecting';
+  const cvToolCount = Array.isArray(canva.tools) ? canva.tools.length : 0;
+  const anyConnected = canva.status === 'connected' || sculptex.status === 'connected' || linkedin.status === 'connected';
   const toolCount = Array.isArray(sculptex.tools) ? sculptex.tools.length : 0;
 
   return html`<section className="start-panel start-connect">
@@ -818,11 +791,26 @@ function ConnectStep() {
     </div>
 
     <div className="start-group">
-      <div className="start-group-label">Design tool <span className="muted">· pick one</span></div>
-      <div className="start-tiles" role="radiogroup" aria-label="Design tool">
-        ${DESIGN_TOOLS.map((t) => html`<${DesignTile} key=${t.id} tool=${t} design=${design} onPick=${pickDesign} />`)}
-      </div>
-      ${design.status === 'connected' && design.account ? html`<p className="start-group-note">${design.account}</p>` : null}
+      <div className="start-group-label">Design</div>
+      <${ConnectRow}
+        icon="palette"
+        iconClass="is-canva"
+        title="Canva"
+        desc="Generate post graphics with Canva AI or attach your own designs — sign-in opens Canva (no API key) and brings you right back to this step."
+        status=${canva.status === 'connected'
+          ? html`<span className="start-ok"><${Icon} name="check" size=${13} strokeWidth=${2.4} /> Connected${canva.account ? ` · ${canva.account}` : ''}${cvToolCount ? ` · ${cvToolCount} tool${cvToolCount === 1 ? '' : 's'}` : ''}</span>`
+          : canva.status === 'connecting'
+            ? html`<span className="muted">Connecting to Canva…</span>`
+            : canva.status === 'error' && canva.error
+              ? html`<span className="start-err">${clip(canva.error, 160)}</span>`
+              : null}
+      >
+        ${canva.status === 'connected'
+          ? html`<${Button} variant="ghost" size="sm" onClick=${() => disconnectCanva()}>Disconnect<//>`
+          : html`<${Button} variant="secondary" loading=${cvConnecting} onClick=${connectCanvaNow}>
+              ${canva.status === 'error' ? 'Retry' : 'Connect'}
+            <//>`}
+      <//>
     </div>
 
     <div className="start-group">
@@ -831,7 +819,6 @@ function ConnectStep() {
         icon="cube"
         iconClass="is-sculptex"
         title="Sculptex"
-        badge=${html`<${Badge} tone="success">Real MCP<//>`}
         desc="Turn a post idea into a precise 3D render. Sign-in opens Sculptex and brings you right back to this step."
         status=${sculptex.status === 'connected'
           ? html`<span className="start-ok"><${Icon} name="check" size=${13} strokeWidth=${2.4} /> Connected${toolCount ? ` · ${toolCount} tool${toolCount === 1 ? '' : 's'}` : ''}</span>`

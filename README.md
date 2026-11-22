@@ -10,14 +10,14 @@ Lens has **no accounts and no database**. Your data lives in your browser. The o
 
 1. **Start.** Paste your product URL. Lens scans it and listens to communities in parallel, while two glass lenses float over the sources.
 2. **Audience chat.** A short chat with the Lens AI about who the product is for, what hurts and where those people hang out. A live audience profile fills in as you talk.
-3. **Connect your tools (optional).** Pick a design tool (Canva or Figma), connect Sculptex for 3D renders and connect LinkedIn. You can skip all of them.
+3. **Connect your tools (optional).** Connect your Canva account (for post graphics), Sculptex (for 3D renders) and LinkedIn (demo). You can skip all of them.
 4. **Your first posts.** Lens drafts posts from the pain points it found and trends in your field. Swipe right to approve (it's scheduled at the next good posting slot) or left to decline. Press ✎ to edit.
 5. **Every day after that:**
    - **Dashboard:** trending in your field, founder events this week and your pipeline.
    - **Stack:** the swipe stack of suggested posts.
    - **Discover:** ranked threads with quotes and source links.
    - **Outreach:** reply and DM drafts to edit, approve or reject.
-   - **Studio:** write a post and attach a visual (upload, Canva/Figma link or Sculptex render).
+   - **Studio:** write a post and attach a visual (upload, a Canva design you generate or pick, or a Sculptex render).
    - **Schedule:** the week ahead and what's been published.
    - **Analytics:** impressions, engagement, outreach funnel and best posting times.
    - **Chat:** bring your own idea and shape it into a post.
@@ -75,19 +75,21 @@ Lens works fully in **demo mode** with bundled sample data, so you don't need an
 
 If a live call fails, Lens falls back to demo data and shows a non-blocking notice.
 
-## Integrations: mock vs real
+## Integrations
 
 | Integration | Status | What happens |
 | --- | --- | --- |
-| **You.com** | Real | Search, extract and Agents through the `/api/you` relay. |
-| **Claude** | Real (optional) | Direct browser calls to the Anthropic API with your key. |
-| **Sculptex MCP** | Real | A live MCP server (`https://sculptex-git-main-jacksonschorr.vercel.app/mcp`). Lens connects from the browser over MCP Streamable HTTP with OAuth 2.1 + PKCE (or a pasted access token) and calls its tools to render 3D visuals. |
-| **LinkedIn** | Mock, labeled "LinkedIn (demo)" | Connecting simulates a sign-in with a sample profile. Sending or publishing adds the item to a local mock feed and marks the draft sent or posted. No request ever goes to LinkedIn. Analytics numbers are simulated. |
-| **Canva / Figma** | Mock, labeled "demo" | Picking one simulates a connection, so Lens offers that tool's link field when you add a visual. No request goes to Canva or Figma. |
+| **You.com** | Live | Search, extract and Agents through the `/api/you` relay. |
+| **Claude** | Optional | Direct browser calls to the Anthropic API with your key. |
+| **Sculptex MCP** | Live | A live MCP server (`https://sculptex-git-main-jacksonschorr.vercel.app/mcp`). Lens connects from the browser over MCP Streamable HTTP with OAuth 2.1 + PKCE (or a pasted access token) and calls its tools to render 3D visuals. |
+| **LinkedIn** | Demo, labeled "LinkedIn (demo)" | Connecting simulates a sign-in with a sample profile. Sending or publishing adds the item to a local mock feed and marks the draft sent or posted. No request ever goes to LinkedIn. Analytics numbers are simulated. |
+| **Canva MCP** | Live | Canva's official MCP server (`https://mcp.canva.com/mcp`). No API key: Connect sends you to Canva to sign in (OAuth 2.1 + PKCE with dynamic client registration), then back to Lens. In Studio and the swipe-stack editor you can generate a graphic with Canva AI (pick one of its candidates) or pick one of your own designs; Lens exports it as a PNG and attaches it to the post, with an "Open in Canva" link. Canva image links expire after a while, so use "Refresh image" before posting an older draft. |
+
+Figma is no longer supported. Canva is the only design tool.
 
 ### Connections are session-only
 
-Connection state (Sculptex tokens, MCP session and tool list, and the mock LinkedIn and design-tool connections) is kept **only in `sessionStorage`** under `lens_mcp_v1`. It's never written to `localStorage`. Close the tab and you reconnect next time. If Sculptex sign-in redirects you away during onboarding, Lens brings you back to the same step.
+Connection state (Sculptex and Canva tokens, MCP sessions and tool lists, and the mock LinkedIn connection) is kept **only in `sessionStorage`** under `lens_mcp_v1`. It's never written to `localStorage`. Close the tab and you reconnect next time. If Sculptex or Canva sign-in redirects you away during onboarding, Lens brings you back to the same step.
 
 ## Privacy
 
@@ -99,7 +101,7 @@ Connection state (Sculptex tokens, MCP session and tool list, and the mock Linke
   - esm.sh, to load React and htm
   - Google Fonts, to load Inter
   - this site's `/api/you` relay, which forwards to You.com
-  - the services you connect yourself: Anthropic (Claude) and Sculptex
+  - the services you connect yourself: Anthropic (Claude), Sculptex and Canva (`mcp.canva.com`, plus Canva's image links for exported designs)
 - Uploaded images are stored as data URLs in `localStorage`. Very large images may exceed the browser's storage quota, and Lens warns you if that happens.
 
 ## Project layout
@@ -119,10 +121,11 @@ js/demo-data.js               demo data (dates relative to today)
 js/services/ai.js             AI provider switch: You.com Agents (default) or Claude
 js/services/youcom.js         You.com search/extract via the relay
 js/services/claude.js         optional Claude client
-js/services/mcp.js            browser MCP client (Sculptex)
+js/services/mcp.js            browser MCP client (Sculptex, Canva)
 js/services/lens.js           high-level Lens actions used by the views
 js/views/start.js             first-run flow (#/start)
 js/views/stack.js             swipe stack (#/stack)
+js/views/canva.js             shared Canva picker (generate with Canva AI / your designs) for Studio and the stack editor
 js/views/*.js                 dashboard, discover, outreach, studio, schedule, analytics, ideas (chat), settings, connections
 docs/                         architecture contract + v2/v3 specs
 ```

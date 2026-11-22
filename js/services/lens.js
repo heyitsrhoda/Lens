@@ -2,7 +2,7 @@
 // writes it into the store. Demo mode (settings.demoMode or a missing key) uses demo-data with a
 // short simulated delay; live mode uses You.com (search + AI via the ./api/you relay; Claude optional via
 // settings.aiProvider) and falls back to demo data with a toast. Every LLM call goes through ai.js.
-// LinkedIn is MOCKED (no network). Sculptex is a real MCP server (see mcp.js).
+// LinkedIn is MOCKED (no network). Sculptex and Canva are real MCP servers (see mcp.js; OAuth, no API keys).
 
 import { getState, setState, toast, uid, setLoading, liveFlags } from '../store.js';
 import { demo, replyTemplate, dmTemplate, postTemplate, altPostTemplate, postVisual } from '../demo-data.js';
@@ -1367,7 +1367,7 @@ Return:
         const host = hostOf(target);
         const name = titleCase((host.split('.')[0] || 'Your product').replace(/[-_]+/g, ' '));
         profile = { ...clone(base), name, url: target };
-        toast('Demo mode: showing the sample profile. Add a You.com key in Settings (and turn off demo mode) to analyze your real site.', 'info');
+        toast('Demo mode: showing the sample profile. Add a You.com key in Settings (and turn off demo mode) to analyze your site.', 'info');
       }
     }
 
@@ -1814,23 +1814,412 @@ export function addIdeaToStack(proposal) {
   return draft;
 }
 
-// ============================================================== v2: design tool (MOCK, session-only)
+// ============================================================== Canva (REAL MCP, https://mcp.canva.com/mcp)
+// OAuth sign-in only (no API key). Tools are resolved at runtime from tools/list; the names below are Canva's
+// documented names (https://www.canva.dev/docs/mcp/tools/) and are tried first, then a fuzzy intent match.
 
-export async function connectDesignTool(tool) {
-  const t = tool === 'figma' ? 'figma' : 'canva';
-  patchConnection('design', { tool: t, status: 'connecting', account: null });
-  await delay(700, 900);
-  const p = demo?.linkedinProfile || {};
-  const acc = demo?.designAccounts?.[t];
-  const account = acc?.name
-    ? `${acc.name} · ${acc.owner || p.name || 'Founder'} (${t === 'figma' ? 'Figma' : 'Canva'} demo)`
-    : `${p.name || 'Founder'} · ${company().name || 'Team'} (${t === 'figma' ? 'Figma' : 'Canva'} demo)`;
-  patchConnection('design', { tool: t, status: 'connected', account });
-  toast(`${t === 'figma' ? 'Figma' : 'Canva'} (demo) connected.`, 'success');
-  return { tool: t, status: 'connected', account };
+const CANVA_NOT_CONNECTED = 'Connect Canva in Settings → Connections.';
+const CANVA_INTENT = 'Create or find a social media visual for a LinkedIn post drafted in Lens';
+const CANVA_TOOLS = {
+  generate: { names: ['generate-design'], intents: ['generate design', 'design candidates'] },
+  fromCandidate: { names: ['create-design-from-candidate'], intents: ['create design from candidate', 'candidate'] },
+  search: { names: ['search-designs', 'list-designs'], intents: ['search designs', 'list designs'] },
+  get: { names: ['get-design'], intents: [] },
+  export: { names: ['export-design', 'create-design-export-job'], intents: ['export design'] },
+  profile: { names: ['get-user-profile', 'get-profile', 'get-current-user', 'get-user', 'whoami', 'me'], intents: [] },
+};
+// generate-design's design_type enum (per Canva/Composio docs) has no LinkedIn type; these are square/landscape social formats.
+const CANVA_TYPE_FALLBACKS = ['linkedin_post', 'instagram_post', 'facebook_post', 'twitter_post', 'poster'];
+
+let lastCanvaJobId = null;
+
+function canvaConn() {
+  return getState().connections?.canva || {};
 }
 
-export async function disconnectDesignTool() {
-  patchConnection('design', { tool: null, status: 'disconnected', account: null });
+function requireCanva() {
+  if (canvaConn().status !== 'connected') throw new Error(CANVA_NOT_CONNECTED);
+}
+
+async function canvaTool(which, { optional = false } = {}) {
+  const spec = CANVA_TOOLS[which];
+  let tool = mcp.findTool('canva', spec.names, spec.intents);
+  if (!tool) {
+    await mcp.listTools('canva');
+    tool = mcp.findTool('canva', spec.names, spec.intents);
+  }
+  if (!tool && !optional) {
+    throw new Error(`Your Canva connection doesn't offer "${spec.names[0]}". Reconnect Canva in Settings → Connections and try again.`);
+  }
+  return tool || null;
+}
+
+function schemaProps(tool) {
+  const schema = tool?.inputSchema || {};
+  return { props: schema.properties || {}, required: Array.isArray(schema.required) ? schema.required : [] };
+}
+
+// Keep only arguments the tool declares (when it declares any), drop empties, and fill other required fields.
+function canvaArgs(tool, values) {
+  const { props, required } = schemaProps(tool);
+  const names = Object.keys(props);
+  const args = {};
+  for (const [k, v] of Object.entries(values)) {
+    if (v === undefined || v === null || v === '') continue;
+    if (names.length && !(k in props)) continue;
+    args[k] = v;
+  }
+  if (names.length && 'user_intent' in props && !('user_intent' in args)) args.user_intent = CANVA_INTENT;
+  for (const n of required) if (!(n in args)) args[n] = defaultFor(props[n] || {});
+  return args;
+}
+
+function mainTextProp(tool, fallback) {
+  const { props, required } = schemaProps(tool);
+  const names = Object.keys(props);
+  if (!names.length) return fallback;
+  const pref = ['query', 'prompt', 'brief', 'description', 'text', 'instructions'];
+  for (const p of pref) if (p in props) return p;
+  return required.find((n) => isStringProp(props[n]) && !props[n]?.enum && n !== 'user_intent') || fallback;
+}
+
+// Depth-first search across parsed JSON values for the first key in `keys` whose value passes `ok`.
+function findKey(values, keys, ok = (v) => v != null, depth = 0) {
+  if (depth > 6 || values == null) return undefined;
+  const list = Array.isArray(values) && depth === 0 ? values : [values];
+  for (const v of list) {
+    if (!v || typeof v !== 'object') continue;
+    if (!Array.isArray(v)) {
+      for (const k of keys) if (k in v && ok(v[k])) return v[k];
+    }
+    for (const child of Array.isArray(v) ? v : Object.values(v)) {
+      if (child && typeof child === 'object') {
+        const hit = findKey(child, keys, ok, depth + 1);
+        if (hit !== undefined) return hit;
+      }
+    }
+  }
+  return undefined;
+}
+
+const isObj = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+
+function toIso(v) {
+  if (v == null || v === '') return '';
+  if (typeof v === 'number') return new Date(v < 1e12 ? v * 1000 : v).toISOString();
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
+function firstThumb(x) {
+  if (!x) return '';
+  if (typeof x.thumbnail === 'string') return x.thumbnail;
+  return x.thumbnail?.url || x.thumbnails?.[0]?.url || x.thumbnail_url || x.thumbnailUrl || '';
+}
+
+function normalizeDesign(d) {
+  if (!isObj(d)) return null;
+  const id = d.id || d.design_id || '';
+  if (!id) return null;
+  const editUrl = d.urls?.edit_url || d.edit_url || d.editUrl || d.url || '';
+  return {
+    id: String(id),
+    title: d.title || d.name || 'Untitled design',
+    thumbnailUrl: firstThumb(d),
+    editUrl,
+    viewUrl: d.urls?.view_url || d.view_url || d.viewUrl || d.url || editUrl,
+    updatedAt: toIso(d.updated_at ?? d.updatedAt ?? d.modified_at),
+    pageCount: Number(d.page_count || d.pageCount) || undefined,
+  };
+}
+
+function normalizeCandidate(c, i) {
+  if (!isObj(c)) return null;
+  const id = c.candidate_id || c.candidateId || c.id || '';
+  if (!id) return null;
+  return { id: String(id), thumbnailUrl: firstThumb(c), title: c.title || `Option ${i + 1}`, url: c.url || '' };
+}
+
+function canvaError(prefix, e) {
+  const msg = String(e?.message || e || 'unknown error');
+  if (msg === CANVA_NOT_CONNECTED || /sign-in expired|Connect Canva/i.test(msg)) return new Error(msg);
+  if (/license_required/i.test(msg)) return new Error(`${prefix}: this design uses premium Canva elements your plan can't export.`);
+  return new Error(`${prefix}: ${msg.replace(/^Canva:?\s*/, '')}`);
+}
+
+function decodeJwtName(token) {
+  try {
+    const part = String(token || '').split('.')[1];
+    if (!part) return '';
+    const json = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/')));
+    return json.name || json.display_name || json.email || '';
+  } catch {
+    return '';
+  }
+}
+
+let canvaAccountPromise = null;
+
+/** Best-effort: fill connections.canva.account (display name) from a profile tool or the token. Never throws. */
+function fillCanvaAccount() {
+  if (!canvaAccountPromise) canvaAccountPromise = lookupCanvaAccount().finally(() => { canvaAccountPromise = null; });
+  return canvaAccountPromise;
+}
+
+async function lookupCanvaAccount() {
+  try {
+    let account = '';
+    const tool = mcp.findTool('canva', CANVA_TOOLS.profile.names);
+    if (tool) {
+      const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, canvaArgs(tool, {})));
+      account = findKey(parsed.json, ['display_name', 'displayName', 'name', 'email'], (v) => typeof v === 'string' && v.trim()) || '';
+    }
+    if (!account) account = decodeJwtName(canvaConn().auth?.accessToken);
+    if (account) patchConnection('canva', { account: String(account).trim() });
+  } catch (e) {
+    console.warn('[Lens] Canva profile lookup failed', e);
+  }
+}
+
+mcp.onConnected((key) => (key === 'canva' ? fillCanvaAccount() : null));
+
+/**
+ * Connect Canva (real MCP). May redirect the page to Canva's sign-in; on return app.js's
+ * handleOAuthCallback finishes the connection. → connection object ({ redirecting: true } while redirecting).
+ */
+export async function connectCanva() {
+  const conn = await mcp.connect('canva');
+  if (conn?.redirecting) return conn;
+  if (conn?.status === 'connected') {
+    await fillCanvaAccount();
+    toast(`Canva connected · ${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`, 'success');
+  }
+  return mcp.getConnection('canva');
+}
+
+export async function disconnectCanva() {
+  mcp.disconnect('canva');
+  lastCanvaJobId = null;
   return null;
+}
+
+/** Full details for one design (thumbnail URLs are signed and expire after ~15 min). */
+export async function canvaGetDesign(designId) {
+  requireCanva();
+  if (!designId) throw new Error('Pick a Canva design first.');
+  try {
+    const tool = await canvaTool('get');
+    const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, canvaArgs(tool, { design_id: designId })));
+    const d = normalizeDesign(findKey(parsed.json, ['design'], isObj) || parsed.data);
+    if (!d) throw new Error('Canva returned no design.');
+    return d;
+  } catch (e) {
+    throw canvaError('Could not open that Canva design', e);
+  }
+}
+
+/** Search (or, with no query, list recent) designs. → [{ id, title, thumbnailUrl, editUrl, viewUrl, updatedAt }] */
+export async function canvaDesigns({ query = '', limit = 20, thumbnails = true } = {}) {
+  requireCanva();
+  return withLoading('canva', async () => {
+    try {
+      const tool = await canvaTool('search');
+      const q = String(query || '').trim();
+      const { props } = schemaProps(tool);
+      const sortEnum = props.sort_by?.enum || [];
+      const args = canvaArgs(tool, {
+        query: q || undefined,
+        limit: 'limit' in props ? limit : undefined,
+        sort_by: !q && sortEnum.includes('modified_descending') ? 'modified_descending' : undefined,
+      });
+      const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, args));
+      const list = findKey(parsed.json, ['results', 'items', 'designs'], Array.isArray) || (Array.isArray(parsed.data) ? parsed.data : []);
+      const designs = list.map(normalizeDesign).filter(Boolean).slice(0, limit);
+      if (thumbnails) {
+        // search-designs results carry no thumbnail; fetch a few via get-design (best-effort).
+        const missing = designs.filter((d) => !d.thumbnailUrl).slice(0, 12);
+        await Promise.allSettled(missing.map(async (d) => {
+          const full = await canvaGetDesign(d.id);
+          Object.assign(d, {
+            thumbnailUrl: full.thumbnailUrl || d.thumbnailUrl,
+            editUrl: full.editUrl || d.editUrl,
+            viewUrl: full.viewUrl || d.viewUrl,
+            updatedAt: full.updatedAt || d.updatedAt,
+          });
+        }));
+      }
+      return designs;
+    } catch (e) {
+      throw canvaError('Canva search failed', e);
+    }
+  });
+}
+
+function pickDesignType(tool, wanted) {
+  const { props } = schemaProps(tool);
+  const prop = props.design_type;
+  if (!prop) return undefined;
+  const options = Array.isArray(prop.enum) ? prop.enum : [];
+  const w = String(wanted || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (!options.length) return w || 'instagram_post';
+  if (w && options.includes(w)) return w;
+  if (w) {
+    const loose = options.find((o) => o.includes(w) || w.includes(o));
+    if (loose) return loose;
+  }
+  return CANVA_TYPE_FALLBACKS.find((o) => options.includes(o)) || options[0];
+}
+
+async function createFromCandidate(candidateId, jobId) {
+  const tool = await canvaTool('fromCandidate');
+  const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, canvaArgs(tool, { job_id: jobId, candidate_id: candidateId })));
+  let design = normalizeDesign(findKey(parsed.json, ['design_summary', 'design'], isObj) || parsed.data);
+  if (!design) throw new Error(parsed.text ? clip(parsed.text, 200) : 'Canva did not return the new design.');
+  if (!design.thumbnailUrl) {
+    try {
+      const full = await canvaGetDesign(design.id);
+      design = { ...design, thumbnailUrl: full.thumbnailUrl, editUrl: design.editUrl || full.editUrl, viewUrl: design.viewUrl || full.viewUrl };
+    } catch { /* thumbnail is optional */ }
+  }
+  return { design, text: parsed.text, raw: parsed };
+}
+
+/**
+ * Generate design candidates from a brief (Canva AI). Canva asks clients to let the user pick a candidate, so by
+ * default this returns candidates only; call canvaCreateFromCandidate(candidate.id, jobId) to make the real design.
+ * With autoCreate: true the first candidate is turned into a design right away.
+ * → { jobId, candidates: [{ id, thumbnailUrl, title, url }], design: {id,title,editUrl,viewUrl,thumbnailUrl}|null, designType, text, raw }
+ */
+export async function canvaGenerate({ prompt, designType, brandKitId, autoCreate = false } = {}) {
+  requireCanva();
+  const p = String(prompt || '').trim();
+  if (!p) throw new Error('Describe the design you want Canva to make.');
+  return withLoading('canva', async () => {
+    try {
+      const tool = await canvaTool('generate');
+      const type = pickDesignType(tool, designType);
+      const textProp = mainTextProp(tool, 'query');
+      const args = canvaArgs(tool, { [textProp]: p, design_type: type, brand_kit_id: brandKitId || undefined });
+      const raw = await mcp.callTool('canva', tool.name, args);
+      const parsed = mcp.parseToolResult(raw);
+      const job = findKey(parsed.json, ['job'], isObj);
+      const jobId = job?.id || findKey(parsed.json, ['job_id', 'jobId'], (v) => typeof v === 'string' && v) || null;
+      const list = findKey(parsed.json, ['generated_designs', 'candidates'], Array.isArray) || [];
+      const candidates = list.map(normalizeCandidate).filter(Boolean);
+      let design = normalizeDesign(findKey(parsed.json, ['design_summary', 'design'], isObj));
+      if (!candidates.length && !design) {
+        const status = String(job?.status || '').toLowerCase();
+        if (status && status !== 'success') {
+          throw new Error(status === 'failed' ? (job?.error?.message || 'generation failed.') : 'Canva is still working on it — try again in a moment.');
+        }
+        throw new Error(parsed.text ? clip(parsed.text, 240) : 'Canva returned no designs.');
+      }
+      if (jobId) lastCanvaJobId = jobId;
+      if (!design && autoCreate && candidates[0] && jobId) design = (await createFromCandidate(candidates[0].id, jobId)).design;
+      return { jobId, candidates, design: design || null, designType: type || '', text: parsed.text, raw: parsed };
+    } catch (e) {
+      throw canvaError('Canva could not generate a design', e);
+    }
+  });
+}
+
+/** Turn a generated candidate into an editable design. → { design: { id, title, editUrl, viewUrl, thumbnailUrl }, text, raw } */
+export async function canvaCreateFromCandidate(candidateId, jobId) {
+  requireCanva();
+  const job = jobId || lastCanvaJobId;
+  if (!candidateId) throw new Error('Pick one of the Canva options first.');
+  if (!job) throw new Error('That Canva generation expired — generate again.');
+  return withLoading('canva', async () => {
+    try {
+      return await createFromCandidate(candidateId, job);
+    } catch (e) {
+      throw canvaError('Canva could not create that design', e);
+    }
+  });
+}
+
+/**
+ * Export a design as PNG (first page). → { imageUrl, urls, jobId, raw }
+ * Canva export URLs are signed and expire, so use them right away.
+ */
+export async function canvaExportPng(designId) {
+  requireCanva();
+  if (!designId) throw new Error('Pick a Canva design first.');
+  return withLoading('canva', async () => {
+    try {
+      const tool = await canvaTool('export');
+      const { props } = schemaProps(tool);
+      const fmt = props.format || {};
+      const fmtType = Array.isArray(fmt.type) ? fmt.type[0] : fmt.type;
+      let format = { type: 'png' };
+      if (fmtType === 'string' || Array.isArray(fmt.enum)) {
+        format = (fmt.enum || []).find((x) => String(x).toLowerCase() === 'png') || 'png';
+      } else if (fmt.properties?.pages) {
+        format = { type: 'png', pages: [1] };
+      }
+      const args = canvaArgs(tool, { design_id: designId, format });
+      const parsed = mcp.parseToolResult(await mcp.callTool('canva', tool.name, args));
+      const job = findKey(parsed.json, ['job'], isObj) || (isObj(parsed.data) ? parsed.data : {});
+      const rawUrls = job.urls || findKey(parsed.json, ['urls', 'download_urls', 'exports'], Array.isArray) || [];
+      let urls = rawUrls.map((u) => (typeof u === 'string' ? u : u?.url)).filter((u) => typeof u === 'string' && /^https?:/.test(u));
+      if (!urls.length) urls = parsed.urls.filter((u) => /export|download|\.png(\?|$)/i.test(u));
+      if (!urls.length && parsed.images[0]) urls = [parsed.images[0].src];
+      if (!urls.length) {
+        const status = String(job.status || '').toLowerCase();
+        if (status && status !== 'success') {
+          throw new Error(status === 'failed' ? (job.error?.message || job.error?.code || 'export failed.') : 'Canva is still exporting — try again in a moment.');
+        }
+        throw new Error(parsed.text ? clip(parsed.text, 240) : 'Canva returned no export link.');
+      }
+      return { imageUrl: urls[0], urls, jobId: job.id || null, raw: parsed };
+    } catch (e) {
+      throw canvaError('Canva export failed', e);
+    }
+  });
+}
+
+/**
+ * Build a Draft.visual for a Canva design: exports a PNG, falling back to a design thumbnail.
+ * design: { id, title?, editUrl?, viewUrl?, thumbnailUrl? } (or a design id string).
+ * With { refresh: true } the passed thumbnailUrl is ignored (it is likely the expired link being replaced) and the
+ * fallback is a fresh thumbnail from get-design; if that is unavailable too, the export error is thrown.
+ * → { visual: { type:'canva', designId, src, link, caption }, fromThumbnail, exportError }
+ *   fromThumbnail: true when the PNG export failed and src is a short-lived thumbnail; exportError explains why.
+ */
+export async function canvaVisual(design, { caption, refresh = false } = {}) {
+  const d = typeof design === 'string' ? { id: design } : design || {};
+  if (!d.id) throw new Error('Pick a Canva design first.');
+  let src = '';
+  let exportError = '';
+  try {
+    src = (await canvaExportPng(d.id)).imageUrl;
+  } catch (e) {
+    exportError = e?.message || String(e);
+    let thumb = refresh ? '' : d.thumbnailUrl || '';
+    if (!thumb) {
+      try {
+        thumb = (await canvaGetDesign(d.id)).thumbnailUrl || '';
+      } catch { /* fall through to the export error */ }
+    }
+    if (!thumb) throw e;
+    console.warn('[Lens] Canva export failed; using a temporary thumbnail', e);
+    src = thumb;
+  }
+  return {
+    visual: {
+      type: 'canva',
+      designId: d.id,
+      src,
+      link: d.editUrl || d.viewUrl || '',
+      caption: caption || (d.title ? `Canva design: ${d.title}` : 'Canva design'),
+    },
+    fromThumbnail: !!exportError,
+    exportError,
+  };
+}
+
+/** Export a Canva design and set it as the draft's visual. → updated draft */
+export async function attachCanvaToDraft(draftId, design, opts = {}) {
+  const { visual } = await canvaVisual(design, opts);
+  return updateDraft(draftId, { visual });
 }

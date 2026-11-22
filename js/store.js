@@ -1,6 +1,6 @@
 // js/store.js — the single app store.
 // - Everything durable lives in localStorage 'lens_state_v1' (no database, no accounts).
-// - MCP / mock connections are TEMPORARY: sessionStorage 'lens_mcp_v1' only. Close the tab → gone.
+// - MCP (Sculptex, Canva) / mock (LinkedIn) connections are TEMPORARY: sessionStorage 'lens_mcp_v1' only. Close the tab → gone.
 // - toasts, ui.loading, ui.chatOpen and ui.relay (You.com relay status) are never persisted.
 // - v2 (onboarding, swipe stack, analytics) and v3 (You.com as AI provider) keys are deep-merged into older saves.
 import { useState, useEffect, useRef } from './lib.js';
@@ -11,6 +11,8 @@ const SS_KEY = 'lens_mcp_v1';
 const STORAGE_VERSION = 2;
 const TOAST_MS = 5000;
 export const SCULPTEX_URL = 'https://sculptex-git-main-jacksonschorr.vercel.app/mcp';
+export const CANVA_URL = 'https://mcp.canva.com/mcp';
+const MCP_KEYS = ['sculptex', 'canva']; // real MCP servers (mcp.js); everything else in connections is a mock
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -84,7 +86,7 @@ function defaultConnections() {
   return {
     linkedin: { status: 'disconnected', profile: null }, // MOCK — "LinkedIn (demo)"
     sculptex: { url: SCULPTEX_URL, status: 'disconnected', tools: [], auth: null, sessionId: null, error: '' }, // REAL MCP
-    design: { tool: null, status: 'disconnected', account: null }, // MOCK Canva/Figma pick
+    canva: { url: CANVA_URL, status: 'disconnected', tools: [], auth: null, sessionId: null, error: '', account: null }, // REAL MCP (OAuth, no API key)
   };
 }
 
@@ -142,6 +144,24 @@ function migrate(state, fromVersion) {
   return next;
 }
 
+// Figma support was removed: { type:'figma', src } → { type:'upload', src }; without an image it is dropped.
+function dropFigmaVisuals(state) {
+  const fix = (v) => {
+    if (!v || v.type !== 'figma') return v;
+    return typeof v.src === 'string' && v.src ? { type: 'upload', src: v.src, caption: v.caption || '' } : null;
+  };
+  const drafts = Array.isArray(state.drafts) ? state.drafts : [];
+  const feed = Array.isArray(state.linkedinFeed) ? state.linkedinFeed : [];
+  if (!drafts.some((d) => d && d.visual && d.visual.type === 'figma') && !feed.some((e) => e && e.visual && e.visual.type === 'figma')) {
+    return state;
+  }
+  return {
+    ...state,
+    drafts: drafts.map((d) => (d && d.visual && d.visual.type === 'figma' ? { ...d, visual: fix(d.visual) } : d)),
+    linkedinFeed: feed.map((e) => (e && e.visual && e.visual.type === 'figma' ? { ...e, visual: fix(e.visual) || undefined } : e)),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // load
 
@@ -161,10 +181,13 @@ function load() {
   // Connections never come from localStorage — only from this tab's session.
   const savedConn = session ? safeGet(session, SS_KEY) : null;
   const conn = mergeDefaults(defaultConnections(), isPlainObject(savedConn) ? savedConn : {});
-  // A mock connect interrupted by a reload can't finish; Sculptex 'connecting' is left for mcp.js (OAuth round-trip).
+  // v4: the mock Canva/Figma picker ('design') is gone — Canva is a real MCP connection now.
+  delete conn.design;
+  delete conn.figma;
+  // A mock connect interrupted by a reload can't finish; MCP 'connecting' is left for mcp.js (OAuth round-trip).
   if (conn.linkedin.status === 'connecting') conn.linkedin = { ...conn.linkedin, status: 'disconnected' };
-  if (conn.design.status === 'connecting') conn.design = { ...conn.design, status: 'disconnected' };
   if (!conn.sculptex.url) conn.sculptex = { ...conn.sculptex, url: SCULPTEX_URL };
+  if (!conn.canva.url) conn.canva = { ...conn.canva, url: CANVA_URL };
   // An OAuth sign-in abandoned mid-way (back button, closed tab) would otherwise stay 'connecting' forever.
   let oauthReturn = false;
   try {
@@ -173,9 +196,14 @@ function load() {
   } catch {
     /* no location */
   }
-  if (conn.sculptex.status === 'connecting' && !oauthReturn) {
-    conn.sculptex = { ...conn.sculptex, status: conn.sculptex.auth ? 'connected' : 'disconnected' };
+  for (const key of MCP_KEYS) {
+    if (conn[key].status === 'connecting' && !oauthReturn) {
+      conn[key] = { ...conn[key], status: conn[key].auth ? 'connected' : 'disconnected' };
+    }
   }
+
+  // Figma is no longer supported: a saved Figma visual keeps its image (as a plain upload) or is dropped.
+  state = dropFigmaVisuals(state);
 
   state = {
     ...state,
@@ -463,5 +491,22 @@ export function resetState() {
 if (typeof window !== 'undefined') {
   window.addEventListener('pagehide', () => {
     if (persistScheduled) persist();
+  });
+  // Back from an OAuth sign-in page can restore this page from the back/forward cache with an MCP connection
+  // still 'connecting' (load() never runs again), which would leave every Connect button stuck on a spinner.
+  window.addEventListener('pageshow', (e) => {
+    if (!e.persisted) return;
+    const conns = state.connections || {};
+    const stuck = MCP_KEYS.filter((k) => conns[k] && conns[k].status === 'connecting');
+    if (!stuck.length) return;
+    setState((s) => {
+      const next = { ...s.connections };
+      for (const k of stuck) {
+        if (next[k] && next[k].status === 'connecting') {
+          next[k] = { ...next[k], status: next[k].auth ? 'connected' : 'disconnected' };
+        }
+      }
+      return { connections: next };
+    });
   });
 }

@@ -1,4 +1,4 @@
-// js/app.js — boots Lens: OAuth callback (Sculptex MCP), app shell, routing, chat, toasts.
+// js/app.js — boots Lens: OAuth callback (Sculptex / Canva MCP), app shell, routing, chat, toasts.
 // '/start' (first-run onboarding) renders full-screen without the shell; every other route renders in it.
 import { html, React, Fragment, createRoot, useEffect, useState, useRef } from './lib.js';
 import { useStore, setState, getState, toast, resetState, liveFlags } from './store.js';
@@ -160,16 +160,10 @@ const CONNECTIONS_HREF = href('/settings?tab=connections');
 function useConnectionRows() {
   const li = useStore((s) => (s.connections && s.connections.linkedin ? s.connections.linkedin.status : 'disconnected'));
   const sx = useStore((s) => (s.connections && s.connections.sculptex ? s.connections.sculptex.status : 'disconnected'));
-  const design = useStore((s) => (s.connections && s.connections.design) || null);
-  const designTool = design && design.tool;
+  const cv = useStore((s) => (s.connections && s.connections.canva ? s.connections.canva.status : 'disconnected'));
   return [
     { id: 'sculptex', label: 'Sculptex', note: 'MCP', status: sx || 'disconnected' },
-    {
-      id: 'design',
-      label: designTool === 'figma' ? 'Figma' : designTool === 'canva' ? 'Canva' : 'Design tool',
-      note: 'demo',
-      status: (design && design.status) || 'disconnected',
-    },
+    { id: 'canva', label: 'Canva', note: 'MCP', status: cv || 'disconnected' },
     { id: 'linkedin', label: 'LinkedIn', note: 'demo', status: li || 'disconnected' },
   ];
 }
@@ -519,7 +513,7 @@ async function boot() {
   const mcp = await mcpP;
   if (hasOAuthReturn()) {
     const failed = (err) => {
-      toast(`Sculptex sign-in didn't complete: ${err && err.message ? err.message : err}`, 'error');
+      toast(`Sign-in didn't complete: ${err && err.message ? err.message : err}`, 'error');
       // Never leave an OAuth code sitting in the address bar.
       try {
         history.replaceState(history.state, '', location.pathname + location.hash);

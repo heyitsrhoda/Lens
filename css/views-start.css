@@ -562,36 +562,6 @@
 .start-group-label .muted { text-transform: none; letter-spacing: 0; font-weight: 500; }
 .start-group-note { margin: 8px 2px 0; font-size: 12.5px; color: var(--text-3); }
 
-.start-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.start-tile {
-  position: relative;
-  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
-  padding: 18px 18px 16px;
-  min-height: 150px;
-  text-align: left;
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  border: 1.5px solid var(--border);
-  box-shadow: var(--shadow);
-  transition: border-color 0.15s, box-shadow 0.2s var(--ease), transform 0.2s var(--ease);
-}
-.start-tile:hover:not(:disabled) { border-color: var(--border-strong); transform: translateY(-1px); }
-.start-tile:disabled { cursor: progress; }
-.start-tile.is-selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring), var(--shadow); }
-.start-tile-glyph { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; color: #fff; margin-bottom: 6px; }
-.start-tile--canva .start-tile-glyph { background: linear-gradient(135deg, #00C4CC, #7D2AE8); }
-.start-tile--figma .start-tile-glyph { background: linear-gradient(135deg, #F24E1E, #A259FF 60%, #1ABCFE); }
-.start-tile-name { font-weight: 620; font-size: 15px; display: inline-flex; align-items: center; gap: 6px; }
-.start-tile-blurb { font-size: 13px; color: var(--text-2); line-height: 1.4; }
-.start-tile-state { margin-top: auto; padding-top: 8px; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 550; color: var(--text-3); }
-.start-tile.is-selected .start-tile-state { color: var(--accent); }
-.start-tile-radio {
-  position: absolute; top: 16px; right: 16px; width: 18px; height: 18px; border-radius: 50%;
-  border: 1.5px solid var(--border-strong); background: var(--surface);
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-.start-tile.is-selected .start-tile-radio { border-color: var(--accent); box-shadow: inset 0 0 0 4px var(--surface), inset 0 0 0 10px var(--accent); }
-
 .start-conn {
   display: flex; align-items: center; gap: 14px;
   padding: 16px;
@@ -603,6 +573,7 @@
 .start-conn-icon { flex-shrink: 0; width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: var(--surface-2); color: var(--text-2); }
 .start-conn-icon.is-sculptex { background: var(--accent-soft); color: var(--accent); }
 .start-conn-icon.is-linkedin { background: #0A66C2; color: #fff; }
+.start-conn-icon.is-canva { background: linear-gradient(135deg, #00C4CC, #7D2AE8); color: #fff; }
 .start-conn-main { flex: 1; min-width: 0; }
 .start-conn-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 620; font-size: 15px; }
 .start-conn-desc { margin-top: 3px; font-size: 13px; color: var(--text-2); line-height: 1.45; }
@@ -668,17 +639,12 @@
   .start-ready-btn { width: 100%; }
 
   .start-panel { padding: 4px 16px 28px; }
-  .start-tiles { gap: 10px; }
-  .start-tile { min-height: 0; padding: 14px; }
-  .start-tile-blurb { display: none; }
   .start-conn { flex-wrap: wrap; padding: 14px; }
   .start-conn-action { width: 100%; display: flex; justify-content: flex-end; }
   .start-swipe-area { min-height: 360px; }
 }
 
 @media (max-width: 420px) {
-  .start-tiles { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .start-tile-glyph { width: 36px; height: 36px; }
   .stx-chip { font-size: 12px; }
 }
 
@@ -705,5 +671,5 @@
   .start-sk { animation: none; }
   .stx-progress span { animation: none; transform: scaleX(0.6); }
   .start-ready-bar span { animation: none; transform: scaleX(1); opacity: 0.35; }
-  .start-dot, .start-tile, .start-url-go { transition: none; }
+  .start-dot, .start-url-go { transition: none; }
 }

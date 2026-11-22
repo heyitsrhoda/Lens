@@ -807,32 +807,14 @@ button.pill:hover, a.pill:hover { background: var(--surface-2); color: var(--tex
 .set-stats span { font-size: 12px; color: var(--text-3); }
 .set-data-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
-/* connections panel additions (design-tool picker, provider toggle, You.com primary card) */
+/* connections panel additions (provider toggle, You.com primary card) */
 .cx-panel { gap: 16px; }
 .cx-primary { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow); }
-.cx-logo-design { background: linear-gradient(135deg, #00c4cc, #7d2ae8); }
+.cx-logo-canva { background: linear-gradient(135deg, #00c4cc, #7d2ae8); }
 .cx-note-warn { background: var(--warning-soft); }
 .cx-note-warn > svg { color: var(--warning); }
 .cx-note-grow { flex: 1; min-width: 0; }
 .cx-note .btn { flex: none; margin: -4px 0; }
-.cx-design-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.cx-design-tile {
-  display: flex; align-items: center; gap: 10px; min-width: 0;
-  padding: 12px; border-radius: var(--radius);
-  border: 1px solid var(--border); background: var(--surface);
-  color: var(--text); text-align: left; cursor: pointer;
-  transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
-}
-.cx-design-tile:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-2); }
-.cx-design-tile:disabled { cursor: progress; opacity: 0.8; }
-.cx-design-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.cx-design-tile.is-selected { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent) inset; }
-.cx-design-mark { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; color: #fff; flex: none; }
-.cx-design-canva .cx-design-mark { background: linear-gradient(135deg, #00c4cc, #7d2ae8); }
-.cx-design-figma .cx-design-mark { background: linear-gradient(135deg, #f24e1e, #a259ff); }
-.cx-design-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.cx-design-name { font-weight: 600; }
-.cx-design-state { width: 18px; display: grid; place-items: center; color: var(--accent); flex: none; }
 .cx-segmented {
   display: inline-flex; padding: 3px; gap: 2px; max-width: 100%;
   border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border);
@@ -849,7 +831,6 @@ button.pill:hover, a.pill:hover { background: var(--surface-2); color: var(--tex
 
 @media (max-width: 859.98px) {
   .set-tabs { margin-bottom: 16px; }
-  .cx-design-tiles { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 520px) {
   .set-inline { flex-wrap: wrap; }
@@ -865,4 +846,69 @@ button.pill:hover, a.pill:hover { background: var(--surface-2); color: var(--tex
   .sidebar, .topbar, .chat-fab, .chat-drawer, .toast-stack, .more-backdrop { display: none !important; }
   .app { display: block; }
   .page { padding: 0; }
+}
+
+/* Canva picker (js/views/canva.js) + Connections → Canva MCP test grid */
+.cv-panel { gap: 12px; }
+.cv-pane { gap: 10px; }
+.cv-row { gap: 8px; flex-wrap: wrap; align-items: center; }
+.cv-search { flex-wrap: nowrap; }
+.cv-search .input { flex: 1; min-width: 0; }
+.cv-results { gap: 8px; }
+.cv-note {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text-2);
+  font-size: 13px; line-height: 1.45;
+}
+.cv-note > .icon { flex: none; margin-top: 2px; }
+.cv-note.is-ok { background: var(--success-soft); color: var(--success); }
+.cv-note.is-warn { background: var(--warning-soft); color: var(--warning); }
+.cv-seg {
+  display: flex; padding: 3px; gap: 2px; max-width: 100%;
+  border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border);
+}
+.cv-seg-btn {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 0;
+  border: 0; background: transparent; color: var(--text-2);
+  padding: 7px 10px; border-radius: 7px; font: inherit; font-size: 13px; font-weight: 550; cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.cv-seg-btn:hover:not(:disabled) { color: var(--text); }
+.cv-seg-btn:disabled { cursor: not-allowed; opacity: 0.6; }
+.cv-seg-btn.is-active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.cv-seg-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; }
+.cv-item {
+  position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  padding: 6px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); text-align: left; font: inherit; cursor: pointer; text-decoration: none;
+  transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s;
+}
+.cv-item:hover:not(:disabled) { border-color: var(--border-strong); transform: translateY(-1px); }
+.cv-item:disabled { cursor: progress; }
+.cv-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cv-item.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.cv-item-title { font-size: 12px; font-weight: 550; padding: 0 2px 2px; }
+.cv-item-busy {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  border-radius: inherit; background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+.cv-thumb {
+  display: grid; place-items: center; width: 100%; aspect-ratio: 1 / 1; overflow: hidden;
+  border-radius: 6px; background: var(--surface-2); color: var(--text-3);
+}
+.cv-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cv-current {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2);
+}
+.cv-current .cv-thumb { width: 88px; flex: none; background: var(--surface); }
+.cv-current-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.cv-current-text a.btn { text-decoration: none; }
+@media (max-width: 420px) {
+  .cv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cv-current .cv-thumb { width: 64px; }
+  .cv-seg-btn { padding: 7px 6px; font-size: 12.5px; }
 }

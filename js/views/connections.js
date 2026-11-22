@@ -1,15 +1,16 @@
 // Connections — rendered inside Settings → Connections (named export ConnectionsPanel).
-// No accounts. API keys live in localStorage; tool connections (Sculptex MCP, mock design tool,
+// No accounts. API keys live in localStorage; tool connections (Sculptex MCP, Canva MCP,
 // mock LinkedIn) live in sessionStorage only. You.com is the default AI provider via ./api/you.
 import { html, useState, useEffect } from '../lib.js';
-import { useStore, setState, getState, toast, SCULPTEX_URL, liveFlags } from '../store.js';
+import { useStore, setState, getState, toast, SCULPTEX_URL, CANVA_URL, liveFlags } from '../store.js';
 import { Button, Card, Badge, Icon, Spinner } from '../ui.js';
 import * as mcp from '../services/mcp.js';
 import * as youcom from '../services/youcom.js';
 import * as claude from '../services/claude.js';
-import { connectLinkedIn, disconnectLinkedIn, renderWithSculptex, connectDesignTool, disconnectDesignTool } from '../services/lens.js';
+import { connectLinkedIn, disconnectLinkedIn, renderWithSculptex, connectCanva, disconnectCanva, canvaDesigns } from '../services/lens.js';
 
 const DEFAULT_SCULPTEX_URL = SCULPTEX_URL;
+const DEFAULT_CANVA_URL = CANVA_URL || mcp.DEFAULT_URLS.canva;
 const DEFAULT_RENDER_PROMPT = 'a 40mm cable clip for a desk edge';
 const EMPTY = Object.freeze([]);
 
@@ -291,7 +292,7 @@ function SculptexCard() {
     <${Card}
       className="cx-card cx-span-2"
       title=${html`<span className="cx-title"><span className="cx-logo cx-logo-sculptex"><${Icon} name="cube" size=${18} /></span>Sculptex MCP</span>`}
-      subtitle="Real MCP server for 3D renders used in Studio visuals."
+      subtitle="3D renders for your post visuals."
       actions=${html`<div className="row cx-badges">
         <${Badge} tone="info">Session only<//>
         <${StatusBadge} status=${status} />
@@ -686,27 +687,46 @@ function YouCard() {
   `;
 }
 
-/* ---------- 4. Design tool: Canva or Figma (demo) ---------- */
+/* ---------- 4. Canva MCP (real) ---------- */
 
-const DESIGN_TOOLS = [
-  { id: 'canva', name: 'Canva', blurb: 'Templates and quick social graphics.', icon: 'palette' },
-  { id: 'figma', name: 'Figma', blurb: 'Frames from your product design files.', icon: 'layers' },
-];
-
-function DesignToolCard() {
-  const conn = useStore((s) => (s.connections ? s.connections.design : null)) || {};
+function CanvaCard() {
+  const conn = useStore((s) => (s.connections ? s.connections.canva : null)) || {};
   const status = conn.status || 'disconnected';
-  const [busy, setBusy] = useState('');
-  const current = status === 'connected' || status === 'connecting' ? conn.tool : null;
+  const tools = conn.tools || EMPTY;
+  const connected = status === 'connected';
 
-  async function pick(tool) {
-    if (busy || (current === tool && status === 'connected')) return;
-    setBusy(tool);
+  const [url, setUrl] = useState(conn.url || DEFAULT_CANVA_URL);
+  const [urlError, setUrlError] = useState('');
+  const [busy, setBusy] = useState('');
+  const [token, setToken] = useState('');
+  const [designs, setDesigns] = useState({ state: 'idle', items: [], error: '' });
+
+  useEffect(() => {
+    setUrl(conn.url || DEFAULT_CANVA_URL);
+  }, [conn.url]);
+
+  function commitUrl() {
+    const next = url.trim();
+    if (!validServerUrl(next)) {
+      setUrlError('Enter a full https:// MCP endpoint URL.');
+      return false;
+    }
+    setUrlError('');
+    if (next !== conn.url) {
+      // Tokens and sessions belong to a specific server — drop them when the URL changes.
+      patchConnection('canva', { url: next, tools: [], auth: null, sessionId: null, error: '', status: 'disconnected', account: null });
+    }
+    return true;
+  }
+
+  async function doConnect() {
+    if (!commitUrl()) return;
+    setBusy('connect');
     try {
-      await connectDesignTool(tool);
+      // connectCanva toasts on success; it may also leave the page for Canva's sign-in and come back here.
+      await connectCanva();
     } catch (e) {
-      toast(`Design tool (demo) connect failed: ${errMessage(e)}`, 'error');
-      patchConnection('design', { tool: null, status: 'disconnected', account: null });
+      patchConnection('canva', { status: 'error', error: errMessage(e) });
     } finally {
       setBusy('');
     }
@@ -714,59 +734,182 @@ function DesignToolCard() {
 
   async function doDisconnect() {
     try {
-      await disconnectDesignTool();
-    } catch {
-      patchConnection('design', { tool: null, status: 'disconnected', account: null });
+      await disconnectCanva();
+    } catch (e) {
+      patchConnection('canva', { status: 'disconnected', tools: [], auth: null, sessionId: null, error: '', account: null });
+    }
+    setDesigns({ state: 'idle', items: [], error: '' });
+    toast('Canva disconnected. Its token was removed from this tab.', 'info');
+  }
+
+  async function refreshTools() {
+    setBusy('tools');
+    try {
+      const list = await mcp.listTools('canva');
+      if (Array.isArray(list)) patchConnection('canva', { tools: list });
+    } catch (e) {
+      patchConnection('canva', { error: errMessage(e) });
+    } finally {
+      setBusy('');
     }
   }
 
+  async function applyToken() {
+    const t = token.trim().replace(/^Bearer\s+/i, '');
+    if (!t) return;
+    if (!commitUrl()) return;
+    setBusy('connect');
+    try {
+      await mcp.setManualToken('canva', t);
+      const after = getState().connections?.canva;
+      if (after && after.status === 'connected') {
+        toast(`Canva connected — ${(after.tools || []).length} tools available`, 'success');
+      }
+    } catch (e) {
+      patchConnection('canva', { status: 'error', error: errMessage(e) });
+    } finally {
+      setBusy('');
+      setToken('');
+    }
+  }
+
+  async function testDesigns() {
+    setDesigns({ state: 'loading', items: [], error: '' });
+    try {
+      const items = await canvaDesigns({ limit: 6 });
+      setDesigns({ state: 'done', items: items || [], error: '' });
+    } catch (e) {
+      setDesigns({ state: 'error', items: [], error: errMessage(e) });
+    }
+  }
+
+  const authMode = conn.auth ? (conn.auth.manual ? 'Pasted token' : 'OAuth') : null;
+  const isDefault = (conn.url || DEFAULT_CANVA_URL) === DEFAULT_CANVA_URL;
+
   return html`
     <${Card}
-      className="cx-card"
-      title=${html`<span className="cx-title"><span className="cx-logo cx-logo-design"><${Icon} name="palette" size=${18} /></span>Design tool</span>`}
-      subtitle="Pick one. Lens offers it when you add a visual to a post."
+      className="cx-card cx-span-2"
+      title=${html`<span className="cx-title"><span className="cx-logo cx-logo-canva"><${Icon} name="palette" size=${18} /></span>Canva MCP</span>`}
+      subtitle="Your Canva account: generate post graphics with Canva AI and attach your designs."
       actions=${html`<div className="row cx-badges">
-        <${Badge} tone="warning">Demo<//>
-        <${StatusBadge} status=${busy ? 'connecting' : status} />
+        <${Badge} tone="info">Session only<//>
+        <${StatusBadge} status=${status} />
       </div>`}
     >
       <div className="stack">
-        <div className="cx-design-tiles" role="radiogroup" aria-label="Design tool">
-          ${DESIGN_TOOLS.map((t) => {
-            const selected = current === t.id;
-            return html`<button
-              key=${t.id}
-              type="button"
-              role="radio"
-              aria-checked=${selected ? 'true' : 'false'}
-              className=${`cx-design-tile cx-design-${t.id}${selected ? ' is-selected' : ''}`}
-              disabled=${!!busy}
-              onClick=${() => pick(t.id)}
-            >
-              <span className="cx-design-mark" aria-hidden="true"><${Icon} name=${t.icon} size=${18} /></span>
-              <span className="cx-design-text">
-                <span className="cx-design-name">${t.name}</span>
-                <span className="small muted">${t.blurb}</span>
-              </span>
-              <span className="cx-design-state" aria-hidden="true">
-                ${busy === t.id ? html`<${Spinner} size=${14} />` : selected && status === 'connected' ? html`<${Icon} name="check" size=${16} />` : null}
-              </span>
-            </button>`;
-          })}
+        <div className="field">
+          <label className="field-label" htmlFor="cx-canva-url">Server URL</label>
+          <div className="cx-inline">
+            <input
+              id="cx-canva-url"
+              className="input"
+              type="url"
+              value=${url}
+              disabled=${connected || busy === 'connect'}
+              onChange=${(e) => setUrl(e.target.value)}
+              onBlur=${() => url.trim() !== (conn.url || '') && commitUrl()}
+              spellCheck=${false}
+            />
+            ${!connected && !isDefault &&
+            html`<${Button} variant="ghost" size="sm" onClick=${() => { setUrl(DEFAULT_CANVA_URL); patchConnection('canva', { url: DEFAULT_CANVA_URL, auth: null, tools: [], sessionId: null, error: '', status: 'disconnected', account: null }); }}>Reset<//>`}
+          </div>
+          ${urlError
+            ? html`<span className="field-hint cx-danger-text">${urlError}</span>`
+            : html`<span className="field-hint">Canva's official MCP server (Streamable HTTP). ${connected ? 'Disconnect to change it.' : ''}</span>`}
         </div>
 
-        ${status === 'connected' && conn.account && html`<p className="small muted">Signed in as ${conn.account}</p>`}
-
-        <div className="cx-demo-banner">
-          <strong>Demo — no real Canva or Figma account is used.</strong>
-          <span>Paste a share link when you add a visual; Lens shows it in the post preview.</span>
+        <div className="cx-note">
+          <${Icon} name="link" size=${14} />
+          <span>
+            No API key. Connect sends you to Canva to sign in and approve Lens (OAuth), then straight back here. The token
+            is kept in this tab's sessionStorage only — close the tab and the connection is gone.
+          </span>
         </div>
 
         <div className="row cx-actions">
-          ${status === 'connected' && html`<${Button} variant="ghost" icon="x" onClick=${doDisconnect}>Disconnect<//>`}
+          ${connected
+            ? html`
+                <${Button} variant="secondary" icon="refresh" loading=${busy === 'tools'} disabled=${!!busy} onClick=${refreshTools}>Refresh tools<//>
+                <${Button} variant="ghost" icon="x" onClick=${doDisconnect}>Disconnect<//>
+              `
+            : html`
+                <${Button} variant="primary" icon="plug" loading=${busy === 'connect'} disabled=${!!busy} onClick=${doConnect}>
+                  ${status === 'error' ? 'Try again' : 'Connect Canva'}
+                <//>
+                ${(status === 'error' || status === 'connecting') && !busy &&
+                html`<${Button} variant="ghost" onClick=${doDisconnect}>Reset connection<//>`}
+              `}
           <span className="spacer"></span>
-          <${Badge} tone="info">Session only<//>
+          ${connected && html`<span className="small muted">${conn.account ? `Signed in as ${conn.account}` : 'Signed in'}${authMode ? ` · ${authMode}` : ''}</span>`}
         </div>
+
+        ${(conn.error || status === 'error') &&
+        html`<${ResultBox} tone="error" title="Canva connection problem">${conn.error || 'Canva did not complete the connection.'}<//>`}
+
+        ${!connected &&
+        html`<details className="cx-disclosure">
+          <summary>Paste access token instead</summary>
+          <div className="stack cx-disclosure-body">
+            <p className="small muted">
+              Only if the sign-in redirect can't complete. Paste a Canva MCP access token; it is stored for this tab
+              session only.
+            </p>
+            <div className="cx-key">
+              <input
+                className="input cx-key-input"
+                type="password"
+                value=${token}
+                placeholder="Access token"
+                autoComplete="off"
+                spellCheck=${false}
+                onChange=${(e) => setToken(e.target.value)}
+                onKeyDown=${(e) => { if (e.key === 'Enter') { e.preventDefault(); if (!busy) applyToken(); } }}
+                aria-label="Canva access token"
+              />
+              <${Button} variant="secondary" size="sm" disabled=${!token.trim() || !!busy} onClick=${applyToken}>Use token & connect<//>
+            </div>
+          </div>
+        </details>`}
+
+        <div className="divider"></div>
+
+        <div className="cx-section">
+          <div className="row">
+            <h3 className="cx-h3">Discovered tools</h3>
+            ${connected && html`<${Badge} tone="neutral">${tools.length}<//>`}
+          </div>
+          ${connected
+            ? tools.length
+              ? html`<ul className="cx-tools">${tools.map((t) => html`<${ToolItem} key=${t.name} tool=${t} />`)}</ul>`
+              : html`<p className="small muted">Connected, but Canva listed no tools. Try “Refresh tools”.</p>`
+            : html`<p className="small muted">Connect to list the tools Canva exposes (generate, search, export…). Click a tool to see its input schema.</p>`}
+        </div>
+
+        ${connected &&
+        html`<div className="divider"></div>
+          <div className="cx-section">
+            <div className="row">
+              <h3 className="cx-h3">Test: your recent designs</h3>
+              <span className="spacer"></span>
+              <${Button} variant="secondary" size="sm" icon="image" loading=${designs.state === 'loading'} disabled=${designs.state === 'loading'} onClick=${testDesigns}>
+                ${designs.state === 'done' ? 'Load again' : 'Load designs'}
+              <//>
+            </div>
+            ${designs.state === 'error' && html`<${ResultBox} tone="error" title="Canva request failed">${designs.error}<//>`}
+            ${designs.state === 'done' &&
+            (designs.items.length
+              ? html`<div className="cv-grid">
+                  ${designs.items.map(
+                    (d) => html`<a key=${d.id} className="cv-item" href=${d.editUrl || d.viewUrl || 'https://www.canva.com/'} target="_blank" rel="noopener noreferrer" title=${d.title || 'Canva design'}>
+                      ${d.thumbnailUrl
+                        ? html`<span className="cv-thumb"><img src=${d.thumbnailUrl} alt="" loading="lazy" referrerPolicy="no-referrer" /></span>`
+                        : html`<span className="cv-thumb cv-thumb-empty" aria-hidden="true"><${Icon} name="palette" size=${20} /></span>`}
+                      <span className="cv-item-title truncate">${d.title || 'Untitled design'}</span>
+                    </a>`,
+                  )}
+                </div>`
+              : html`<p className="small muted">Connected, but your Canva account has no designs yet.</p>`)}
+          </div>`}
       </div>
     <//>
   `;
@@ -915,7 +1058,7 @@ export function ConnectionsPanel() {
       <div className="cx-grid">
         <${YouCard} />
         <${SculptexCard} />
-        <${DesignToolCard} />
+        <${CanvaCard} />
         <${LinkedInCard} />
         <${ClaudeCard} />
       </div>

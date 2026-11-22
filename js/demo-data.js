@@ -1144,13 +1144,8 @@ function makeLinkedinFeed(now) {
 }
 
 /* ------------------------------------------------------------------ */
-/* v2: mock design-tool accounts + scripted onboarding chat            */
+/* v2: scripted onboarding chat                                        */
 /* ------------------------------------------------------------------ */
-
-const designAccounts = {
-  canva: { name: 'Sculptex Brand Kit', owner: linkedinProfile.name, label: 'Canva (demo)', url: 'https://www.canva.com/' },
-  figma: { name: 'Sculptex Marketing', owner: linkedinProfile.name, label: 'Figma (demo)', url: 'https://www.figma.com/' },
-};
 
 // Lines for the demo-mode onboarding chat. Each takes the founder's own words so replies feel heard.
 const onboardingScript = {
@@ -1185,7 +1180,6 @@ export const demo = {
   drafts: (now = new Date()) => makeDrafts(now),
   suggestions: (now = new Date()) => makeSuggestions(now),
   linkedinFeed: (now = new Date()) => makeLinkedinFeed(now),
-  designAccounts,
   onboardingScript,
   sculptexDemoRender,
   sculptexDemoPrompt,

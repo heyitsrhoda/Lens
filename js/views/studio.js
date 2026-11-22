@@ -1,5 +1,5 @@
 // Studio (#/studio) — Branch B: turn a recurring pain point into a LinkedIn post,
-// attach a visual (upload / Canva / Figma / Sculptex 3D render), preview, schedule or post.
+// attach a visual (upload / real Canva MCP / Sculptex 3D render), preview, schedule or post.
 // Also exports small shared helpers + LinkedIn-style preview components used by
 // outreach.js and schedule.js.
 import { html, useState, useEffect, useMemo, useRef, useCallback } from '../lib.js';
@@ -7,6 +7,7 @@ import { useStore, setState, toast, uid } from '../store.js';
 import { useRoute, navigate } from '../router.js';
 import { Button, Badge, Empty, Spinner, Modal, Tabs, Field, Icon, SourceIcon, timeAgo } from '../ui.js';
 import { draftPost, rewrite, sendDraft, scheduleDraft, renderWithSculptex, clusterPainPoints, postText } from '../services/lens.js';
+import { CanvaPanel } from './canva.js';
 
 /* ------------------------------------------------------------------ */
 /* Shared helpers (exported)                                           */
@@ -214,30 +215,27 @@ function truncateForFeed(text) {
   return { truncated, text: truncated ? cut.trimEnd() : t };
 }
 
-export function figmaEmbedUrl(link) {
-  return `https://www.figma.com/embed?embed_host=lens&url=${encodeURIComponent(link)}`;
+function CanvaLinkCard({ link }) {
+  return html`<a className="li-linkcard" href=${link} target="_blank" rel="noopener noreferrer">
+    <span className="li-linkcard-icon"><${Icon} name="palette" size=${18} /></span>
+    <span className="li-linkcard-text">
+      <strong>Canva design</strong>
+      <span className="small muted">Open in Canva · refresh the image from the Canva tab</span>
+    </span>
+    <${Icon} name="external" size=${14} />
+  </a>`;
 }
 
-export function VisualMedia({ visual, compact = false }) {
+export function VisualMedia({ visual }) {
+  // Canva export/thumbnail links are signed and expire; fall back to the "Open in Canva" card when one breaks.
+  const [broken, setBroken] = useState(false);
+  const src = visual ? visual.src : '';
+  useEffect(() => setBroken(false), [src]);
   if (!visual) return null;
-  if (visual.src) {
-    return html`<div className="li-media"><img src=${visual.src} alt=${visual.caption || 'Post visual'} loading="lazy" /></div>`;
+  if (src && !broken) {
+    return html`<div className="li-media"><img src=${src} alt=${visual.caption || 'Post visual'} loading="lazy" onError=${() => setBroken(true)} /></div>`;
   }
-  if (visual.type === 'figma' && visual.link) {
-    return html`<div className=${cx('li-media li-media-embed', compact && 'compact')}>
-      <iframe title="Figma design" src=${figmaEmbedUrl(visual.link)} allowFullScreen loading="lazy"></iframe>
-    </div>`;
-  }
-  if (visual.type === 'canva' && visual.link) {
-    return html`<a className="li-linkcard" href=${visual.link} target="_blank" rel="noopener noreferrer">
-      <span className="li-linkcard-icon"><${Icon} name="image" size=${18} /></span>
-      <span className="li-linkcard-text">
-        <strong>Canva design</strong>
-        <span className="small muted">Export as PNG and upload it to show the image here</span>
-      </span>
-      <${Icon} name="external" size=${14} />
-    </a>`;
-  }
+  if (visual.type === 'canva' && visual.link) return html`<${CanvaLinkCard} link=${visual.link} />`;
   return null;
 }
 
@@ -319,17 +317,6 @@ function sculptexPromptFor(painPoint) {
   if (hit) return hit.prompt;
   const short = p.length > 90 ? `${p.slice(0, 89).trimEnd()}…` : p;
   return `a simple, printable desk object that visualizes "${short}" — clean geometry, about 80 mm wide`;
-}
-
-function parseUrl(value, hostNeedle) {
-  try {
-    const u = new URL(String(value || '').trim());
-    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
-    if (hostNeedle && !u.hostname.toLowerCase().includes(hostNeedle)) return null;
-    return u.toString();
-  } catch (e) {
-    return null;
-  }
 }
 
 function readFileAsDataUrl(file) {
@@ -619,73 +606,6 @@ function UploadButton({ label = 'Upload image', onFile, variant = 'secondary' })
   </span>`;
 }
 
-function LinkVisual({ draft, kind }) {
-  const visual = draft.visual && draft.visual.type === kind ? draft.visual : null;
-  const [link, setLink] = useState(visual ? visual.link || '' : '');
-  const [warn, setWarn] = useState('');
-  const host = kind === 'canva' ? 'canva.com' : 'figma.com';
-  const name = kind === 'canva' ? 'Canva' : 'Figma';
-  const valid = parseUrl(link, host);
-
-  function attach() {
-    if (!valid) {
-      toast(`That doesn't look like a ${name} link (${host}).`, 'error');
-      return;
-    }
-    patchDraft(draft.id, { visual: { type: kind, link: valid, src: visual ? visual.src : undefined, caption: `${name} design` } });
-    toast(`${name} link attached.`, 'success');
-  }
-
-  async function onFile(file) {
-    if (!file.type.startsWith('image/')) {
-      toast('Please choose an image file (PNG or JPG).', 'error');
-      return;
-    }
-    setWarn(file.size > MAX_UPLOAD_BYTES ? `Large image (${fmtBytes(file.size)}). It may not fit in browser storage — export a smaller PNG if saving fails.` : '');
-    try {
-      const src = await readFileAsDataUrl(file);
-      patchDraft(draft.id, { visual: { type: kind, link: visual ? visual.link : valid || undefined, src, caption: file.name } });
-    } catch (e) {
-      toast(`Couldn't read the image: ${e.message || e}`, 'error');
-    }
-  }
-
-  return html`<div className="stack st-visual-panel">
-    <${Field} group=${true} label=${`${name} share link`} hint=${kind === 'canva' ? 'Share → Copy link in Canva' : 'Share → Copy link in Figma (file, frame or prototype)'}>
-      <div className="row st-link-row">
-        <input
-          className="input"
-          type="url"
-          value=${link}
-          placeholder=${kind === 'canva' ? 'https://www.canva.com/design/…' : 'https://www.figma.com/design/…'}
-          onChange=${(e) => setLink(e.target.value)}
-          onKeyDown=${(e) => e.key === 'Enter' && attach()}
-        />
-        <${Button} variant="secondary" size="sm" icon="link" disabled=${!link.trim()} onClick=${attach}>Attach<//>
-      </div>
-    <//>
-    ${visual && visual.link
-      ? html`<div className="stack st-attached">
-          <div className="row">
-            <a className="btn btn-secondary btn-sm" href=${visual.link} target="_blank" rel="noopener noreferrer">
-              <${Icon} name="external" size=${14} /> Open in ${name}
-            </a>
-            <${UploadButton} label="Upload exported PNG" onFile=${onFile} />
-          </div>
-          <p className="small muted st-hint">
-            <${Icon} name="image" size=${13} /> LinkedIn needs an image file: in ${name}, choose Share → Download → PNG, then upload it here.
-          </p>
-          ${kind === 'figma' && !visual.src
-            ? html`<div className="st-figma-embed">
-                <iframe title="Figma embed" src=${figmaEmbedUrl(visual.link)} allowFullScreen loading="lazy"></iframe>
-              </div>`
-            : null}
-        </div>`
-      : null}
-    ${warn ? html`<div className="st-warn small"><${Icon} name="alert" size=${13} /> ${warn}</div>` : null}
-  </div>`;
-}
-
 function UploadVisual({ draft }) {
   const [warn, setWarn] = useState('');
   const visual = draft.visual && draft.visual.type === 'upload' ? draft.visual : null;
@@ -809,9 +729,9 @@ function SculptexVisual({ draft }) {
     ${sculptexStatus !== 'connected'
       ? html`<div className="st-note small">
           <${Icon} name="plug" size=${13} />
-          <span>Sculptex isn't connected in this tab, so you'll get a demo render. <a href="#/connections">Connect Sculptex</a> for real 3D renders.</span>
+          <span>Sculptex isn't connected in this tab, so you'll get a demo render. <a href="#/connections">Connect Sculptex</a> for 3D renders.</span>
         </div>`
-      : html`<div className="st-note small ok"><${Icon} name="check" size=${13} /><span>Sculptex connected — renders run on the real MCP server.</span></div>`}
+      : html`<div className="st-note small ok"><${Icon} name="check" size=${13} /><span>Sculptex connected.</span></div>`}
     <${Field} label="Describe the object" hint="Be concrete: dimensions, holes, materials. Sculptex builds a 3D model and renders it.">
       <textarea
         className="textarea"
@@ -844,7 +764,7 @@ function SculptexVisual({ draft }) {
             : html`<div className="small muted">The model is ready, but no preview image was returned.</div>`}
           <div className="row st-render-meta">
             ${isDemo
-              ? html`<${Badge} tone="warning">Demo render — connect Sculptex for real renders<//>
+              ? html`<${Badge} tone="warning">Sample render — connect Sculptex to render yours<//>
                   <a className="small" href="#/connections">Connections →</a>`
               : html`<${Badge} tone="success">Rendered by Sculptex<//>`}
             <span className="spacer"></span>
@@ -860,11 +780,13 @@ function SculptexVisual({ draft }) {
 }
 
 function VisualSection({ draft, disabled }) {
-  const [mode, setMode] = useState((draft.visual && draft.visual.type) || 'upload');
+  const [mode, setMode] = useState(() => {
+    const t = draft.visual && draft.visual.type;
+    return t === 'canva' || t === 'sculptex' ? t : 'upload';
+  });
   const options = [
     { id: 'upload', label: 'Upload', icon: 'upload' },
-    { id: 'canva', label: 'Canva', icon: 'image' },
-    { id: 'figma', label: 'Figma', icon: 'link' },
+    { id: 'canva', label: 'Canva', icon: 'palette' },
     { id: 'sculptex', label: '3D render', icon: 'cube' },
   ];
   return html`<section className="st-visual">
@@ -895,8 +817,7 @@ function VisualSection({ draft, disabled }) {
     ${disabled
       ? html`<div className="small muted">This post is already published.</div>`
       : html`${mode === 'upload' ? html`<${UploadVisual} draft=${draft} />` : null}
-        ${mode === 'canva' ? html`<${LinkVisual} key="canva" draft=${draft} kind="canva" />` : null}
-        ${mode === 'figma' ? html`<${LinkVisual} key="figma" draft=${draft} kind="figma" />` : null}
+        ${mode === 'canva' ? html`<${CanvaPanel} key=${draft.id} draft=${draft} visual=${draft.visual} onVisual=${(v) => patchDraft(draft.id, { visual: v })} />` : null}
         ${mode === 'sculptex' ? html`<${SculptexVisual} draft=${draft} />` : null}`}
   </section>`;
 }

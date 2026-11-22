@@ -450,7 +450,7 @@ export default function Setup() {
                 <span className="setup-tool-icon"><${Icon} name="cube" size=${16} /></span>
                 <div className="setup-tool-text">
                   <div className="setup-tool-name">Sculptex MCP</div>
-                  <div className="small muted">Real 3D renders for your post visuals.</div>
+                  <div className="small muted">3D renders for your post visuals.</div>
                 </div>
                 <${Badge} tone=${sculptexOn ? 'success' : 'neutral'}>${sculptexOn ? 'Connected' : 'Off'}</${Badge}>
               </li>

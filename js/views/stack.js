@@ -14,6 +14,7 @@ import {
   renderWithSculptex,
 } from '../services/lens.js';
 import { PostPreview, VisualMedia, useProfile, patchDraft, fmtWhen, cx } from './studio.js';
+import { CanvaPanel } from './canva.js';
 
 /* ------------------------------------------------------------------ */
 /* constants + small helpers                                           */
@@ -77,15 +78,6 @@ function readFileAsDataUrl(file) {
 function fmtBytes(n) {
   if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   return `${Math.max(1, Math.round(n / 1024))} KB`;
-}
-
-function parseHttpUrl(value) {
-  try {
-    const u = new URL(String(value || '').trim());
-    return u.protocol === 'https:' || u.protocol === 'http:' ? u : null;
-  } catch {
-    return null;
-  }
 }
 
 function errText(e) {
@@ -329,10 +321,10 @@ function SculptexPanel({ draft, onVisual, visual }) {
 
   return html`<div className="stack sw-vis-panel">
     ${status === 'connected'
-      ? html`<div className="sw-note is-ok small"><${Icon} name="check" size=${13} /><span>Sculptex connected — renders run on the real MCP server.</span></div>`
+      ? html`<div className="sw-note is-ok small"><${Icon} name="check" size=${13} /><span>Sculptex connected.</span></div>`
       : html`<div className="sw-note small">
           <${Icon} name="plug" size=${13} />
-          <span>Sculptex isn't connected in this tab, so you'll get a sample render. <a href="#/settings">Connect Sculptex</a> for real 3D renders.</span>
+          <span>Sculptex isn't connected in this tab, so you'll get a sample render. <a href="#/settings">Connect Sculptex</a> for 3D renders.</span>
         </div>`}
     <${Field} label="Describe the object" hint="Concrete beats clever: dimensions, holes, fit.">
       <textarea
@@ -375,7 +367,7 @@ function SculptexPanel({ draft, onVisual, visual }) {
   </div>`;
 }
 
-function UploadPanel({ visual, onVisual, label = 'Choose image', keepLink = false }) {
+function UploadPanel({ onVisual, label = 'Choose image' }) {
   const inputRef = useRef(null);
   const [over, setOver] = useState(false);
   const [warn, setWarn] = useState('');
@@ -389,8 +381,7 @@ function UploadPanel({ visual, onVisual, label = 'Choose image', keepLink = fals
     setWarn(file.size > MAX_UPLOAD_BYTES ? `Large image (${fmtBytes(file.size)}) — it may not survive a reload. A smaller export is safer.` : '');
     try {
       const src = await readFileAsDataUrl(file);
-      if (keepLink && visual && visual.link) onVisual({ ...visual, src, caption: file.name });
-      else onVisual({ type: 'upload', src, caption: file.name });
+      onVisual({ type: 'upload', src, caption: file.name });
     } catch (e) {
       toast(`Couldn't read the image: ${errText(e)}`, 'error');
     }
@@ -431,79 +422,17 @@ function UploadPanel({ visual, onVisual, label = 'Choose image', keepLink = fals
   </div>`;
 }
 
-function LinkPanel({ visual, onVisual }) {
-  const design = useStore((s) => (s.connections && s.connections.design) || {});
-  const tool = design.tool === 'figma' || design.tool === 'canva' ? design.tool : null;
-  const connected = !!tool && design.status === 'connected';
-  const current = visual && (visual.type === 'canva' || visual.type === 'figma') ? visual : null;
-  const [link, setLink] = useState(current ? current.link || '' : '');
-  const name = tool === 'figma' ? 'Figma' : tool === 'canva' ? 'Canva' : 'Canva or Figma';
-
-  function attach() {
-    const u = parseHttpUrl(link);
-    const host = u ? u.hostname.toLowerCase() : '';
-    const type = host.endsWith('figma.com') ? 'figma' : host.endsWith('canva.com') || host.endsWith('canva.link') ? 'canva' : null;
-    if (!u || !type || (tool && type !== tool)) {
-      toast(`That doesn't look like a ${tool ? `${name} link (${tool}.com)` : 'Canva or Figma link'}.`, 'error');
-      return;
-    }
-    onVisual({ type, link: u.toString(), src: current && current.type === type ? current.src : undefined, caption: `${type === 'figma' ? 'Figma' : 'Canva'} design` });
-  }
-
-  const openHref = tool === 'figma' ? 'https://www.figma.com/files' : 'https://www.canva.com/create/linkedin-posts/';
-
-  return html`<div className="stack sw-vis-panel">
-    ${connected
-      ? html`<div className="sw-note is-ok small"><${Icon} name="check" size=${13} /><span>${design.account || `${name} (demo) connected`}</span></div>`
-      : html`<div className="sw-note small">
-          <${Icon} name="palette" size=${13} />
-          <span>${tool ? `${name} (demo) isn't connected in this tab.` : 'No design tool picked yet.'} <a href="#/settings">Choose Canva or Figma</a> in Settings — or just paste a share link.</span>
-        </div>`}
-    <${Field} group=${true} label=${`${name} share link`} hint=${tool === 'figma' ? 'Share → Copy link (file, frame or prototype). Figma links preview live.' : 'Share → Copy link in your design tool.'}>
-      <div className="row sw-link-row">
-        <input
-          className="input"
-          type="url"
-          value=${link}
-          placeholder=${tool === 'figma' ? 'https://www.figma.com/design/…' : tool === 'canva' ? 'https://www.canva.com/design/…' : 'https://www.canva.com/… or https://www.figma.com/…'}
-          onChange=${(e) => setLink(e.target.value)}
-          onKeyDown=${(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              attach();
-            }
-          }}
-        />
-        <${Button} variant="secondary" size="sm" icon="link" disabled=${!link.trim()} onClick=${attach}>Attach<//>
-      </div>
-    <//>
-    <div className="row sw-vis-row">
-      ${tool
-        ? html`<a className="btn btn-ghost btn-sm" href=${current ? current.link : openHref} target="_blank" rel="noopener noreferrer">
-            <${Icon} name="external" size=${14} /> ${current ? `Open in ${current.type === 'figma' ? 'Figma' : 'Canva'}` : `Open ${name}`}
-          </a>`
-        : null}
-      ${current
-        ? html`<span className="small muted">LinkedIn needs an image file — export a PNG and add it:</span>`
-        : null}
-    </div>
-    ${current ? html`<${UploadPanel} visual=${current} onVisual=${onVisual} label="Upload exported PNG" keepLink=${true} />` : null}
-  </div>`;
-}
-
 function EditModal({ draft, initialTab, canOpenStudio, onClose, onSaveAndApprove }) {
   const profile = useProfile();
-  const designTool = useStore((s) => (s.connections && s.connections.design && s.connections.design.tool) || null);
   const [body, setBody] = useState(draft.body || '');
   const [visual, setVisual] = useState(draft.visual || null);
   const [busyChip, setBusyChip] = useState('');
   const original = useRef(draft.body || '');
   const rewrote = useRef(false);
-  const linkLabel = designTool === 'figma' ? 'Figma' : designTool === 'canva' ? 'Canva' : 'Canva / Figma';
   const [tab, setTab] = useState(() => {
     if (initialTab) return initialTab;
     const t = draft.visual && draft.visual.type;
-    return t === 'sculptex' ? 'sculptex' : t === 'canva' || t === 'figma' ? 'link' : 'upload';
+    return t === 'sculptex' ? 'sculptex' : t === 'canva' ? 'canva' : 'upload';
   });
 
   function storeBody() {
@@ -538,7 +467,7 @@ function EditModal({ draft, initialTab, canOpenStudio, onClose, onSaveAndApprove
 
   const tabs = [
     { id: 'upload', label: 'Upload', icon: 'upload' },
-    { id: 'link', label: linkLabel, icon: 'palette' },
+    { id: 'canva', label: 'Canva', icon: 'palette' },
     { id: 'sculptex', label: 'Sculptex 3D', icon: 'cube' },
   ];
 
@@ -618,16 +547,24 @@ function EditModal({ draft, initialTab, canOpenStudio, onClose, onSaveAndApprove
           </div>
           ${draft.visualIdea ? html`<div className="sw-idea"><${Icon} name="sparkles" size=${14} /><span className="sw-idea-text"><span className="sw-idea-label">Idea</span> ${draft.visualIdea}</span></div>` : null}
           <${Tabs} tabs=${tabs} value=${tab} onChange=${setTab} className="sw-vis-tabs" />
-          ${tab === 'upload' ? html`<${UploadPanel} visual=${visual} onVisual=${setVisual} label=${visual && visual.type === 'upload' ? 'Replace image' : 'Choose image'} />` : null}
-          ${tab === 'link' ? html`<${LinkPanel} visual=${visual} onVisual=${setVisual} />` : null}
+          ${tab === 'upload' ? html`<${UploadPanel} onVisual=${setVisual} label=${visual && visual.type === 'upload' ? 'Replace image' : 'Choose image'} />` : null}
+          ${tab === 'canva'
+            ? html`<${CanvaPanel}
+                draft=${draft}
+                visual=${visual}
+                onVisual=${setVisual}
+                onBeforeConnect=${save}
+                beforeConnectNote="Connecting leaves this page to sign in to Canva, so your edits to this post are saved first."
+              />`
+            : null}
           ${tab === 'sculptex' ? html`<${SculptexPanel} draft=${draft} visual=${visual} onVisual=${setVisual} />` : null}
         </section>
       </div>
       <aside className="sw-edit-preview">
         <div className="sw-edit-preview-label small muted"><${Icon} name="eye" size=${13} /> Preview · LinkedIn (demo)</div>
         <${PostPreview} profile=${profile} title=${draft.title} body=${body} visual=${visual} timeLabel="now" defaultExpanded=${true} />
-        ${visual && visual.type === 'figma' && visual.src
-          ? html`<div className="small muted">Figma frame: <a href=${visual.link} target="_blank" rel="noopener noreferrer">open</a></div>`
+        ${visual && visual.type === 'canva' && visual.link
+          ? html`<a className="small" href=${visual.link} target="_blank" rel="noopener noreferrer"><${Icon} name="external" size=${12} /> Open in Canva</a>`
           : null}
       </aside>
     </div>
