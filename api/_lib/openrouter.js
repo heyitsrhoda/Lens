@@ -18,6 +18,10 @@ const DEFAULT_MODEL = 'google/gemma-4-31b-it:free';
 const FREE_FALLBACK = 'openrouter/free';
 const FREE_MIN_TOKENS = 4000;
 const isFree = (id) => id.endsWith(':free') || id === FREE_FALLBACK;
+// Reasoning models count their thinking against max_tokens. Cap thinking at 60% of the
+// budget so at least 40% is always left for the answer; thinking is never returned.
+const THINKING_SHARE = 0.6;
+const thinkingBudget = (maxTokens) => ({ max_tokens: Math.floor(maxTokens * THINKING_SHARE), exclude: true });
 
 export const AI_MAX_BODY = 200 * 1024;
 const TIMEOUT_MS = 55000;
@@ -111,11 +115,9 @@ export function buildPayload(body) {
   const payload = { model: primary, messages, max_tokens: maxTokens, stream: false };
   if (isFree(primary)) {
     payload.models = [primary, FREE_FALLBACK];
-    // Free models are often reasoning models whose thinking counts against max_tokens:
-    // keep thinking short and leave room for the answer.
-    payload.reasoning = { effort: 'low', exclude: true };
     payload.max_tokens = Math.max(payload.max_tokens, FREE_MIN_TOKENS);
   }
+  payload.reasoning = thinkingBudget(payload.max_tokens);
   if (body.temperature !== undefined && body.temperature !== null) {
     const t = Number(body.temperature);
     if (typeof body.temperature !== 'number' || !Number.isFinite(t)) throw new AiError(400, '"temperature" must be a number.', 'invalid');
@@ -239,6 +241,6 @@ export async function relayChat(req, body) {
   } catch (e) {
     // Empty answer because thinking used the whole budget: retry once with the maximum budget.
     if (!(e instanceof AiError) || e.code !== 'length' || payload.max_tokens >= MAX_MAX_TOKENS) throw e;
-    return callOpenRouter(req, key, { ...payload, max_tokens: MAX_MAX_TOKENS, reasoning: { effort: 'low', exclude: true } });
+    return callOpenRouter(req, key, { ...payload, max_tokens: MAX_MAX_TOKENS, reasoning: thinkingBudget(MAX_MAX_TOKENS) });
   }
 }

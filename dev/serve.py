@@ -215,9 +215,9 @@ def ai_payload(body):
     payload = {"model": primary, "messages": messages, "max_tokens": max_tokens, "stream": False}
     if primary.endswith(":free") or primary == FREE_FALLBACK:
         payload["models"] = [primary, FREE_FALLBACK]
-        # Free models often reason; keep thinking short and leave room for the answer.
-        payload["reasoning"] = {"effort": "low", "exclude": True}
         payload["max_tokens"] = max(payload["max_tokens"], 4000)
+    # Cap thinking at 60% of the budget so at least 40% is left for the answer.
+    payload["reasoning"] = {"max_tokens": int(payload["max_tokens"] * 0.6), "exclude": True}
     t = body.get("temperature")
     if t is not None:
         if not _num(t):
