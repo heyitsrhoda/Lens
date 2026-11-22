@@ -213,8 +213,11 @@ def ai_payload(body):
         max_tokens = int(min(8000, max(64, round(mt))))
     primary = ai_model()
     payload = {"model": primary, "messages": messages, "max_tokens": max_tokens, "stream": False}
-    if primary.endswith(":free"):
+    if primary.endswith(":free") or primary == FREE_FALLBACK:
         payload["models"] = [primary, FREE_FALLBACK]
+        # Free models often reason; keep thinking short and leave room for the answer.
+        payload["reasoning"] = {"effort": "low", "exclude": True}
+        payload["max_tokens"] = max(payload["max_tokens"], 4000)
     t = body.get("temperature")
     if t is not None:
         if not _num(t):

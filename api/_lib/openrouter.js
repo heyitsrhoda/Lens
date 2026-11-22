@@ -16,6 +16,8 @@
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_MODEL = 'google/gemma-4-31b-it:free';
 const FREE_FALLBACK = 'openrouter/free';
+const FREE_MIN_TOKENS = 4000;
+const isFree = (id) => id.endsWith(':free') || id === FREE_FALLBACK;
 
 export const AI_MAX_BODY = 200 * 1024;
 const TIMEOUT_MS = 55000;
@@ -107,7 +109,13 @@ export function buildPayload(body) {
   }
   const primary = model();
   const payload = { model: primary, messages, max_tokens: maxTokens, stream: false };
-  if (primary.endsWith(':free')) payload.models = [primary, FREE_FALLBACK];
+  if (isFree(primary)) {
+    payload.models = [primary, FREE_FALLBACK];
+    // Free models are often reasoning models whose thinking counts against max_tokens:
+    // keep thinking short and leave room for the answer.
+    payload.reasoning = { effort: 'low', exclude: true };
+    payload.max_tokens = Math.max(payload.max_tokens, FREE_MIN_TOKENS);
+  }
   if (body.temperature !== undefined && body.temperature !== null) {
     const t = Number(body.temperature);
     if (typeof body.temperature !== 'number' || !Number.isFinite(t)) throw new AiError(400, '"temperature" must be a number.', 'invalid');
@@ -215,7 +223,7 @@ export async function callOpenRouter(req, key, payload) {
   const out = contentText(msg.content).trim();
   if (!out) {
     if (typeof msg.refusal === 'string' && msg.refusal.trim()) throw new AiError(422, `The model declined: ${msg.refusal.trim().slice(0, 300)}`, 'upstream');
-    if (finishReason === 'length') throw new AiError(422, 'The model ran out of room before answering. Try a shorter request.', 'upstream');
+    if (finishReason === 'length') throw new AiError(422, 'The model ran out of room before answering. Try again.', 'length');
     throw new AiError(502, 'The model returned an empty answer.', 'upstream');
   }
   return { text: out, model: typeof json.model === 'string' && json.model ? json.model : payload.model, finishReason };
@@ -226,5 +234,11 @@ export async function relayChat(req, body) {
   const payload = buildPayload(body);
   const key = apiKey();
   if (!key) throw new AiError(500, "AI isn't configured on this deployment (OPENROUTER_API_KEY).", 'no-key');
-  return callOpenRouter(req, key, payload);
+  try {
+    return await callOpenRouter(req, key, payload);
+  } catch (e) {
+    // Empty answer because thinking used the whole budget: retry once with the maximum budget.
+    if (!(e instanceof AiError) || e.code !== 'length' || payload.max_tokens >= MAX_MAX_TOKENS) throw e;
+    return callOpenRouter(req, key, { ...payload, max_tokens: MAX_MAX_TOKENS, reasoning: { effort: 'low', exclude: true } });
+  }
 }
