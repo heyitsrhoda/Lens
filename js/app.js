@@ -344,6 +344,31 @@ function scanPage() {
     </div>
   </section>`;
 }
+// Stack is filling: the same two-lens animation as the site scan, with the communities being read.
+function stackScanPage() {
+  const listening = generatingPhase === 'listen';
+  const title = listening ? 'Reading Reddit, Hacker News, X and LinkedIn' : 'Drafting posts';
+  const detail = listening
+    ? 'Finding the pain points people describe that you solve.'
+    : 'Writing posts, replies and DMs from what people are saying.';
+  return `<section class="scan-page waiting stack-scan" aria-labelledby="scan-title" aria-busy="true">
+    <div class="scan-stage" aria-hidden="true">
+      <span class="scan-token behind" style="--x:12%;--y:62%;--delay:-.3s">news.ycombinator.com</span>
+      <span class="scan-token behind icon-token" style="--x:56%;--y:20%;--delay:-.9s">${icon('chat')}</span>
+      <div class="scan-lenses"><div class="glass-lens"></div><div class="glass-lens second"></div></div>
+      <span class="scan-token" style="--x:12%;--y:26%">reddit.com</span>
+      <span class="scan-token" style="--x:40%;--y:56%;--delay:-.6s">x.com</span>
+      <span class="scan-token" style="--x:64%;--y:46%;--delay:-.2s">linkedin.com</span>
+      <span class="scan-token" style="--x:50%;--y:74%;--delay:-1s">indiehackers.com</span>
+      <span class="scan-token icon-token" style="--x:80%;--y:18%;--delay:-.5s">${icon('globe')}</span>
+    </div>
+    <div class="scan-status" role="status">
+      <h1 id="scan-title" tabindex="-1">${esc(title)}</h1>
+      <p class="muted">${esc(detail)}</p>
+      <div class="scan-progress" aria-hidden="true"></div>
+    </div>
+  </section>`;
+}
 function chatTurn(role, content) {
   return `<div class="turn ${role === 'user' ? 'user' : 'agent'}">${role === 'user' ? '' : MINI_LOGO}<div class="bubble">${esc(content)}</div></div>`;
 }
@@ -482,14 +507,7 @@ function decisionButtons(post) {
 }
 function reviewPage() {
   const post = state.posts[0];
-  if (!post && generating) {
-    const listening = generatingPhase === 'listen';
-    const title = listening ? 'Listening to conversations…' : 'Drafting posts…';
-    const detail = listening ? `Lens is reading what people say about ${state.brand?.name || 'you'} and the problem you solve.` : 'Lens is writing from what people are saying and what’s new in your field.';
-    return `<section class="review"><div class="review-top"><h1 tabindex="-1">Post review</h1><span>${listening ? 'Listening…' : 'Drafting…'}</span></div>
-    <div class="stack"><article class="post-card loading-card" aria-label="${esc(title)}" aria-busy="true"><div class="loading-content" role="status">
-      <span class="loading-mark" aria-hidden="true">${LENS_MARK}</span><p>${esc(title)}</p><small>${esc(detail)}</small></div></article></div></section>`;
-  }
+  if (!post && generating) return stackScanPage();
   if (!post) return `<section class="empty-review"><div class="empty-content">
     <span class="empty-check">${icon('approve')}</span><h1 tabindex="-1">You’re all caught up</h1>
     <button class="btn primary" data-action="generate">Generate more</button></div></section>`;
@@ -874,7 +892,22 @@ function setPhase(phase) {
   generatingPhase = phase;
   if (view === 'review' || view === 'settings') refresh();
 }
-async function generateStack({force = false} = {}) {
+// Drafting survives a reload or leaving the page: the flag is saved and boot() picks the run back up.
+const GENERATING_KEY = 'lens-v3-generating';
+const GENERATING_MAX_AGE = 15 * 60 * 1000;
+function pendingGeneration() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(GENERATING_KEY) || 'null');
+    return saved && Date.now() - Number(saved.at || 0) < GENERATING_MAX_AGE ? saved : null;
+  } catch {return null;}
+}
+async function generateStack(options = {}) {
+  if (generating || !state.brand) return;
+  try {localStorage.setItem(GENERATING_KEY, JSON.stringify({at: Date.now()}));} catch {}
+  try {await fillStack(options);}
+  finally {try {localStorage.removeItem(GENERATING_KEY);} catch {}}
+}
+async function fillStack({force = false} = {}) {
   if (generating || !state.brand) return;
   generating = true;
   const owner = state;
@@ -1512,6 +1545,7 @@ async function eraseLocalData() {
   try {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(BANNER_KEY);
+    localStorage.removeItem(GENERATING_KEY);
   } catch {notify('Browser storage could not be cleared.'); return;}
   forgetView();
   resetLocal(structuredClone(INITIAL));
@@ -1804,6 +1838,10 @@ function boot() {
       if (getCalendarPost(Number(remembered.postId))) selectedPostId = Number(remembered.postId);
       else view = 'calendar';
     }
+  }
+  if (state.brand && !state.onboarding && !state.posts.length && pendingGeneration()) {
+    view = 'review';
+    generateStack();
   }
   render(false);
   main.firstElementChild?.classList.add('screen-enter');

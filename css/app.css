@@ -180,3 +180,6 @@ h1[tabindex="-1"]:focus{outline:none}
 #notice a{color:#142219;text-decoration:underline;font-weight:800}#notice a:hover{text-decoration:none}
 @media(max-width:520px){.decisions.labeled{gap:16px}.reply-title{font-size:19px}}
 @media(prefers-reduced-motion:reduce){.post-visual.rendering .visual-orb{animation:none}}
+
+/* Stack drafting reuses the scan stage */
+.stack-scan{padding-top:clamp(28px,7vh,64px)}
