@@ -54,4 +54,4 @@ The local server serves the static files and relays `/api/you` (You.com) and `/a
 
 ### Starting over
 
-Open `https://<your-domain>/?reset` to clear only Lens's data in that browser (brand, drafts, schedule, chats, connections) and return to the URL screen. Settings → Erase local data does the same from inside the app.
+Open `https://<your-domain>/?reset`: Lens asks you to confirm, then clears only its own data in that browser (brand, drafts, schedule, chats, connections) and returns to the URL screen. Settings → Erase local data does the same from inside the app.

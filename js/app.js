@@ -1414,33 +1414,40 @@ document.addEventListener('keydown', event => {
 
 // ---------------------------------------------------------------- boot
 
-/** lensbeta.vercel.app/?reset — start over: clears only Lens's own storage and connections, then the URL screen. */
+/** lensbeta.vercel.app/?reset — asks for confirmation on the page, then clears only Lens's own data. */
 function resetRequested() {
   let params;
   try {params = new URLSearchParams(location.search);} catch {return false;}
   if (!params.has('reset')) return false;
   params.delete('reset');
   const rest = params.toString();
-  try {history.replaceState(null, '', location.pathname + (rest ? '?' + rest : ''));} catch {}
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-    localStorage.removeItem(BANNER_KEY);
-  } catch {}
-  forgetView();
-  resetLocal(structuredClone(INITIAL));
-  view = 'entry';
+  try {history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);} catch {}
   return true;
+}
+function confirmReset() {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'popup';
+  dialog.setAttribute('aria-labelledby', 'reset-title');
+  dialog.innerHTML = `<div class="popup-head"><h2 id="reset-title">Reset Lens?</h2></div>
+    <p>This clears your saved brand, drafts, schedule, chats and connections from this browser and takes you back to the start. Nothing else in your browser is touched.</p>
+    <div class="popup-actions"><button class="btn" type="button" data-reset="cancel" autofocus>Cancel</button><button class="btn danger" type="button" data-reset="confirm">Reset Lens</button></div>`;
+  document.body.append(dialog);
+  dialog.addEventListener('click', async event => {
+    const choice = event.target.closest('[data-reset]')?.dataset.reset;
+    if (!choice) return;
+    dialog.close();
+    if (choice === 'confirm') {
+      await ready;
+      await eraseLocalData();
+    }
+  });
+  dialog.addEventListener('close', () => dialog.remove());
+  dialog.showModal();
 }
 function boot() {
   const reset = resetRequested();
   // Render from local state right away; connection status fills in when lens.init() settles.
   ready = attempt(() => lens.init()).then(result => result || {}, error => ({error: errorText(error)}));
-  if (reset) ready = ready.then(async result => {
-    try {await lens.disconnectAll();} catch {}
-    connecting.clear();
-    notify('Lens was reset in this browser.');
-    return {...result, returnedFrom: undefined};
-  });
   const remembered = takeRememberedView();
   if (state.onboarding) {
     view = 'onboard';
@@ -1457,6 +1464,7 @@ function boot() {
   }
   render(false);
   main.firstElementChild?.classList.add('screen-enter');
+  if (reset) confirmReset();
   try {lens.onConnectionsChange(() => {refresh(); autoPublish();});} catch {}
   window.addEventListener('focus', () => autoPublish());
   document.addEventListener('visibilitychange', () => {if (document.visibilityState === 'visible') autoPublish();});
