@@ -44,18 +44,41 @@ const PUBLISH_RETRY = 5 * 60000;
 const WORKSPACE_VIEWS = ['review', 'chat', 'calendar', 'settings', 'scheduled-post'];
 const LINKEDIN_MAX = 3000; // LinkedIn's limit for headline + blank line + copy
 
-function loadState() {
+// A finished setup is also kept on its own small key, so the brand can never be lost to a failed or partial save.
+const BRAND_KEY = 'lens-v3-brand';
+function readBrandBackup() {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-    const next = {...structuredClone(INITIAL), ...(saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {})};
-    for (const key of ['posts', 'journal', 'brainstorm']) if (!Array.isArray(next[key])) next[key] = [];
-    if (next.onboarding && (typeof next.onboarding !== 'object' || !Array.isArray(next.onboarding.messages))) next.onboarding = null;
-    if (next.onboarding && (!next.onboarding.answers || typeof next.onboarding.answers !== 'object')) next.onboarding.answers = {};
-    next.listen = cleanListen(next.listen);
-    const highest = Math.max(0, ...[...next.posts, ...next.journal].map(item => Number(item?.id) || 0));
+    const saved = JSON.parse(localStorage.getItem(BRAND_KEY) || 'null');
+    return saved && typeof saved === 'object' && !Array.isArray(saved) && typeof saved.name === 'string' && saved.name ? saved : null;
+  } catch {return null;}
+}
+function loadState() {
+  let saved = {};
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) saved = parsed;
+  } catch {saved = {};}
+  const next = {...structuredClone(INITIAL), ...saved};
+  // Each cleanup step on its own: one odd field must never throw away the whole save.
+  const step = fn => {try {fn();} catch (error) {console.warn('[Lens] load step failed', error);}};
+  step(() => {for (const key of ['posts', 'journal', 'brainstorm']) if (!Array.isArray(next[key])) next[key] = [];});
+  step(() => {if (next.brand && (typeof next.brand !== 'object' || Array.isArray(next.brand))) next.brand = null;});
+  step(() => {if (next.onboarding && (typeof next.onboarding !== 'object' || !Array.isArray(next.onboarding.messages))) next.onboarding = null;});
+  step(() => {if (next.onboarding && (!next.onboarding.answers || typeof next.onboarding.answers !== 'object')) next.onboarding.answers = {};});
+  step(() => {next.listen = cleanListen(next.listen);});
+  step(() => {
+    let highest = 0;
+    for (const item of [...next.posts, ...next.journal]) highest = Math.max(highest, Number(item?.id) || 0);
     if (!Number.isInteger(next.next) || next.next <= highest) next.next = highest + 1;
-    return next;
-  } catch {return structuredClone(INITIAL);}
+  });
+  // A saved setup always wins over a stale onboarding run.
+  const backup = readBrandBackup();
+  if (!next.brand && backup) {
+    next.brand = backup;
+    next.onboarding = null;
+  }
+  if (next.brand) next.onboarding = null;
+  return next;
 }
 
 let state = loadState();
@@ -159,11 +182,31 @@ async function hydrateImages() {
   }));
   refresh();
 }
+function serializeState(source) {
+  return JSON.stringify(source, (key, value) =>
+    key === 'src' && typeof value === 'string' && value.startsWith('data:image/') ? stashImage(value) : value);
+}
+/** The same state, slimmed: keeps brand, stack and schedule; drops chat history, old journal entries and threads. */
+function slimState() {
+  const keepJournal = state.journal.filter(item => ['Scheduled', 'Posted'].includes(item.status))
+    .concat(state.journal.filter(item => !['Scheduled', 'Posted'].includes(item.status)).slice(0, 40));
+  return {...state, brainstorm: state.brainstorm.slice(-10), journal: keepJournal,
+    listen: state.listen ? {...state.listen, threads: (state.listen.threads || []).slice(0, 20)} : state.listen};
+}
 function save() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state, (key, value) =>
-      key === 'src' && typeof value === 'string' && value.startsWith('data:image/') ? stashImage(value) : value));
+    if (state.brand) localStorage.setItem(BRAND_KEY, JSON.stringify(state.brand));
+    else if (state.onboarding === null && !state.posts.length && !state.journal.length) localStorage.removeItem(BRAND_KEY);
+  } catch {}
+  try {
+    localStorage.setItem(STORAGE_KEY, serializeState(state));
     saveFailed = false;
+    return;
+  } catch {}
+  try { // storage is tight: save a slimmer copy rather than nothing
+    localStorage.setItem(STORAGE_KEY, serializeState(slimState()));
+    saveFailed = false;
+    return;
   } catch (error) {
     saveFailed = true;
     try {
@@ -1641,6 +1684,7 @@ async function eraseLocalData() {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(BANNER_KEY);
     localStorage.removeItem(GENERATING_KEY);
+    localStorage.removeItem(BRAND_KEY);
   } catch {notify('Browser storage could not be cleared.'); return;}
   imageCache.clear();
   imageKeys.clear();
@@ -1673,7 +1717,9 @@ function adoptSaved() {
   if (saveFailed) return; // this tab holds changes storage could not take
   let raw;
   try {raw = localStorage.getItem(STORAGE_KEY);} catch {return;}
-  if (raw === null && (state.brand || state.onboarding)) {
+  let backup = null;
+  try {backup = localStorage.getItem(BRAND_KEY);} catch {}
+  if (raw === null && backup === null && (state.brand || state.onboarding)) {
     resetLocal(structuredClone(INITIAL)); // erased in another tab
     go('entry');
     return;
