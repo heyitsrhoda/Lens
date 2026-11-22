@@ -303,7 +303,7 @@ function connectionRows() {
     const status = busy ? (connected ? 'Disconnecting…' : 'Connecting…') : connected ? (who ? `Connected · ${who}` : 'Connected') : 'Disconnected';
     const error = connectionErrors[provider] || str(info.error, 300);
     const pending = !connected && !lens.isAvailable(provider);
-    const label = provider === 'LinkedIn' && !connected ? `${provider} <span class="required-tag">Required</span>` : provider;
+    const label = provider === 'LinkedIn' && !connected ? `${provider}<span class="required-star" aria-hidden="true">*</span><span class="visually-hidden"> (required)</span>` : provider;
     const shownStatus = pending ? 'Waiting on Canva to approve Lens' : status;
     const button = pending
       ? '<button class="btn ghost" type="button" disabled>Coming soon</button>'
