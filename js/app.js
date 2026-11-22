@@ -586,7 +586,7 @@ function removeScheduledPost(id) {
   save();
   selectedPostId = null;
   go('calendar');
-  notify('Post removed from your calendar.');
+  notify('Post deleted from your calendar.');
 }
 function getCalendarPost(id) {return calendarPosts().find(post => post.id === id);}
 function findEditablePost(id) {return state.posts.find(post => post.id === id) || getScheduledPost(id);}
@@ -624,13 +624,14 @@ function scheduledPostPage() {
       <label class="form-label">Post copy<textarea class="field" name="copy" rows="6" maxlength="3000" required>${esc(post.copy)}</textarea></label>
       <label class="form-label">Date<input class="field" type="date" name="day" value="${dateKey(post.slot)}" required></label>
       ${visualEditor(post)}
-      <div class="tools"><button class="btn primary" type="submit">Save changes</button><button class="btn danger" type="button" data-action="request-remove-post">Remove from calendar</button></div>
+      <div><button class="btn primary" type="submit">Save changes</button></div>
     </form>
     <div class="revision-panel"><h2>Revise with Lens</h2>
       ${thread ? `<div class="thread" role="log" aria-label="Revision conversation">${thread}</div>` : ''}
       ${revisionComposer('scheduled-revise', post.id, scheduledBusy)}
     </div>
-    <dialog id="remove-post-dialog" class="popup" aria-labelledby="remove-post-title"><div class="popup-head"><h2 id="remove-post-title">Remove this post?</h2></div><p>It comes off your calendar and won’t be posted to LinkedIn.</p><div class="popup-actions"><button class="btn" type="button" data-action="cancel-remove-post" autofocus>Cancel</button><button class="btn danger" type="button" data-action="confirm-remove-post">Remove post</button></div></dialog></section>`;
+    <div class="settings-block delete-post-block"><h2>Delete post</h2><p class="muted">Takes it off your calendar so it won’t be posted to LinkedIn.</p><div class="tools"><button class="btn danger" type="button" data-action="request-remove-post">Delete post</button></div></div>
+    <dialog id="remove-post-dialog" class="popup" aria-labelledby="remove-post-title"><div class="popup-head"><h2 id="remove-post-title">Delete this post?</h2></div><p>It comes off your calendar and won’t be posted to LinkedIn. This can’t be undone.</p><div class="popup-actions"><button class="btn" type="button" data-action="cancel-remove-post" autofocus>Cancel</button><button class="btn danger" type="button" data-action="confirm-remove-post">Delete post</button></div></dialog></section>`;
 }
 function brainstormPage() {
   const messages = state.brainstorm.length ? state.brainstorm : [{role: 'agent', text: `What would you like to post about for ${state.brand.name}?`}];
