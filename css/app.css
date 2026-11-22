@@ -142,3 +142,6 @@ body{overflow-x:clip}
 .posted-meta{display:flex;align-items:center;gap:6px;color:var(--mint)}
 .posted-view .post-copy{max-height:none}
 @media(prefers-reduced-motion:reduce){.typing-dots i,.loading-mark svg{animation:none}}
+
+/* Headings get programmatic focus for screen readers on every screen change; no visible ring for that. */
+h1[tabindex="-1"]:focus{outline:none}
